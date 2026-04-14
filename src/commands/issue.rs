@@ -271,8 +271,10 @@ async fn values(client: &JiraClient, field_name: &str, project: Option<String>) 
     let resolved = fields::resolve_columns(&name_slice, client, STATIC_COLS).await?;
     let col = &resolved[0];
 
-    let field_values =
+    let mut field_values =
         fields::fetch_field_values(client, col, project.as_deref()).await?;
+
+    field_values.sort_by(|a, b| a.value.cmp(&b.value));
 
     println!("Values for '{}':", col.label.bold());
     println!("{}", "─".repeat(60));
