@@ -7,6 +7,21 @@ use crate::client::JiraClient;
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
+/// Metadata about a field's data type, used to pick the right values endpoint.
+#[derive(Debug, Clone, Deserialize)]
+pub struct FieldSchema {
+    #[serde(rename = "type")]
+    pub field_type: String,
+    /// Present on array fields, e.g. `"version"`, `"option"`, `"string"`.
+    pub items: Option<String>,
+    /// System field key, e.g. `"fixVersions"`.
+    #[allow(dead_code)]
+    pub system: Option<String>,
+    /// Custom field type key, e.g. `"com.atlassian.jira.plugin.system.customfieldtypes:select"`.
+    #[serde(rename = "custom")]
+    pub custom_type: Option<String>,
+}
+
 #[derive(Debug, Deserialize)]
 pub struct JiraField {
     pub id: String,
@@ -15,6 +30,7 @@ pub struct JiraField {
     pub custom: bool,
     #[serde(default)]
     pub navigable: bool,
+    pub schema: Option<FieldSchema>,
 }
 
 /// A column resolved to everything needed for rendering.
@@ -25,6 +41,14 @@ pub struct ResolvedCol {
     pub api_id: String,
     /// True for server-side custom fields; drives the generic value extractor.
     pub custom: bool,
+    /// Field schema — present for custom fields, used by the `values` command.
+    pub schema: Option<FieldSchema>,
+}
+
+/// A single enumerable value for a field.
+pub struct FieldValue {
+    pub value: String,
+    pub detail: Option<String>,
 }
 
 // ── Static column table ───────────────────────────────────────────────────────
@@ -105,6 +129,7 @@ pub async fn resolve_columns(
                 label: col_name.to_string(),
                 api_id: api_id.to_string(),
                 custom: false,
+                schema: None,
             });
             continue;
         }
@@ -123,6 +148,7 @@ pub async fn resolve_columns(
                 label: f.name.clone(),
                 api_id: f.id.clone(),
                 custom: true,
+                schema: f.schema.clone(),
             });
         } else {
             bail!(
@@ -133,6 +159,193 @@ pub async fn resolve_columns(
     }
 
     Ok(resolved)
+}
+
+// ── Field values ──────────────────────────────────────────────────────────────
+
+/// Fetch all enumerable values for a resolved column.
+///
+/// - Global fields (status, priority, issuetype, project) need no project key.
+/// - Version and component fields require `--project`.
+/// - Custom option/select/multi-select fields use `createmeta` and require `--project`.
+pub async fn fetch_field_values(
+    client: &JiraClient,
+    col: &ResolvedCol,
+    project: Option<&str>,
+) -> Result<Vec<FieldValue>> {
+    match col.api_id.as_str() {
+        "issuetype" => issuetype_values(client).await,
+        "status"    => status_values(client).await,
+        "priority"  => priority_values(client).await,
+        "project"   => project_values(client).await,
+        "fixVersions" | "versions" | "affectsVersions" => {
+            let p = need_project(project, "version fields")?;
+            version_values(client, p).await
+        }
+        "components" => {
+            let p = need_project(project, "component fields")?;
+            component_values(client, p).await
+        }
+        _ => {
+            // Use the schema stored in ResolvedCol to route custom fields.
+            let schema = col.schema.as_ref().ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Field '{}' has no schema information — cannot determine its value type.",
+                    col.label
+                )
+            })?;
+
+            let is_version = schema.field_type == "version"
+                || (schema.field_type == "array" && schema.items.as_deref() == Some("version"));
+
+            let is_option = schema.field_type == "option"
+                || (schema.field_type == "array" && schema.items.as_deref() == Some("option"))
+                || schema.custom_type.as_deref()
+                    .map(|ct| ct.contains("select") || ct.contains("radio") || ct.contains("checkbox") || ct.contains("multicheckboxes"))
+                    .unwrap_or(false);
+
+            if is_version {
+                let p = need_project(project, "version fields")?;
+                version_values(client, p).await
+            } else if is_option {
+                let p = need_project(project, "custom option fields")?;
+                createmeta_option_values(client, &col.api_id, p).await
+            } else {
+                bail!(
+                    "Field '{}' (type: '{}') does not have a list of enumerable values.",
+                    col.label,
+                    schema.field_type
+                )
+            }
+        }
+    }
+}
+
+// ── Value fetch helpers ───────────────────────────────────────────────────────
+
+fn need_project<'a>(project: Option<&'a str>, context: &str) -> Result<&'a str> {
+    project.ok_or_else(|| {
+        anyhow::anyhow!("--project <KEY> is required for {context}")
+    })
+}
+
+async fn issuetype_values(client: &JiraClient) -> Result<Vec<FieldValue>> {
+    let resp: Value = client.get("issuetype").await?;
+    let arr = resp.as_array().ok_or_else(|| anyhow::anyhow!("Unexpected /issuetype response"))?;
+    Ok(arr.iter().filter_map(|item| {
+        let name = item["name"].as_str()?.to_string();
+        let detail = if item["subtask"].as_bool().unwrap_or(false) {
+            Some("sub-task".to_string())
+        } else {
+            None
+        };
+        Some(FieldValue { value: name, detail })
+    }).collect())
+}
+
+async fn status_values(client: &JiraClient) -> Result<Vec<FieldValue>> {
+    let resp: Value = client.get("status").await?;
+    let arr = resp.as_array().ok_or_else(|| anyhow::anyhow!("Unexpected /status response"))?;
+    Ok(arr.iter().filter_map(|item| {
+        let name = item["name"].as_str()?.to_string();
+        let detail = item["statusCategory"]["name"].as_str().map(|s| s.to_string());
+        Some(FieldValue { value: name, detail })
+    }).collect())
+}
+
+async fn priority_values(client: &JiraClient) -> Result<Vec<FieldValue>> {
+    let resp: Value = client.get("priority").await?;
+    let arr = resp.as_array().ok_or_else(|| anyhow::anyhow!("Unexpected /priority response"))?;
+    Ok(arr.iter().filter_map(|item| {
+        Some(FieldValue {
+            value: item["name"].as_str()?.to_string(),
+            detail: None,
+        })
+    }).collect())
+}
+
+async fn project_values(client: &JiraClient) -> Result<Vec<FieldValue>> {
+    let resp: Value = client.get("project").await?;
+    let arr = resp.as_array().ok_or_else(|| anyhow::anyhow!("Unexpected /project response"))?;
+    Ok(arr.iter().filter_map(|item| {
+        let key = item["key"].as_str()?.to_string();
+        let name = item["name"].as_str().map(|s| s.to_string());
+        Some(FieldValue { value: key, detail: name })
+    }).collect())
+}
+
+async fn version_values(client: &JiraClient, project_key: &str) -> Result<Vec<FieldValue>> {
+    let resp: Value = client.get(&format!("project/{project_key}/versions")).await?;
+    let arr = resp.as_array().ok_or_else(|| anyhow::anyhow!("Unexpected /versions response"))?;
+    Ok(arr.iter().filter_map(|item| {
+        let name = item["name"].as_str()?.to_string();
+        let released = item["released"].as_bool().unwrap_or(false);
+        let date = item["releaseDate"].as_str();
+        let detail = Some(match (released, date) {
+            (true,  Some(d)) => format!("released {d}"),
+            (true,  None)    => "released".to_string(),
+            (false, Some(d)) => format!("unreleased, due {d}"),
+            (false, None)    => "unreleased".to_string(),
+        });
+        Some(FieldValue { value: name, detail })
+    }).collect())
+}
+
+async fn component_values(client: &JiraClient, project_key: &str) -> Result<Vec<FieldValue>> {
+    let resp: Value = client.get(&format!("project/{project_key}/components")).await?;
+    let arr = resp.as_array().ok_or_else(|| anyhow::anyhow!("Unexpected /components response"))?;
+    Ok(arr.iter().filter_map(|item| {
+        let name = item["name"].as_str()?.to_string();
+        let detail = item["description"].as_str()
+            .filter(|d| !d.is_empty())
+            .map(|d| d.to_string());
+        Some(FieldValue { value: name, detail })
+    }).collect())
+}
+
+/// Fetch option values for a custom select/multi-select field via `createmeta`.
+async fn createmeta_option_values(
+    client: &JiraClient,
+    field_id: &str,
+    project_key: &str,
+) -> Result<Vec<FieldValue>> {
+    let params = [
+        ("projectKeys", project_key),
+        ("expand", "projects.issuetypes.fields"),
+    ];
+    let resp: Value = client.get_with_params("issue/createmeta", &params).await?;
+
+    let mut seen = std::collections::HashSet::new();
+    let mut values = Vec::new();
+
+    if let Some(projects) = resp["projects"].as_array() {
+        for proj in projects {
+            if let Some(issuetypes) = proj["issuetypes"].as_array() {
+                for itype in issuetypes {
+                    if let Some(allowed) = itype["fields"][field_id]["allowedValues"].as_array() {
+                        for opt in allowed {
+                            // Option fields use "value"; version-like use "name"
+                            let val = opt.get("value")
+                                .or_else(|| opt.get("name"))
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("?");
+                            if seen.insert(val.to_string()) {
+                                values.push(FieldValue { value: val.to_string(), detail: None });
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if values.is_empty() {
+        bail!(
+            "No options found for this field on project '{project_key}'. \
+             The field may not be configured for that project."
+        );
+    }
+    Ok(values)
 }
 
 // ── Rendering helpers ─────────────────────────────────────────────────────────

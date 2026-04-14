@@ -85,6 +85,14 @@ pub enum IssueCommands {
         /// Assignee account ID or username (use "-" to unassign)
         assignee: String,
     },
+    /// List all possible values for a field
+    Values {
+        /// Field name (e.g. "status", "priority", "Target Version/s")
+        field: String,
+        /// Project key — required for version, component, and custom option fields
+        #[arg(short, long)]
+        project: Option<String>,
+    },
 }
 
 pub async fn handle(cmd: IssueCommands, client: &JiraClient) -> Result<()> {
@@ -116,6 +124,8 @@ pub async fn handle(cmd: IssueCommands, client: &JiraClient) -> Result<()> {
         IssueCommands::Transition { key, status } => transition(client, &key, status).await,
 
         IssueCommands::Assign { key, assignee } => assign(client, &key, &assignee).await,
+
+        IssueCommands::Values { field, project } => values(client, &field, project).await,
     }
 }
 
@@ -251,6 +261,32 @@ async fn list(
         }
         println!();
     }
+    Ok(())
+}
+
+// ── Values ────────────────────────────────────────────────────────────────────
+
+async fn values(client: &JiraClient, field_name: &str, project: Option<String>) -> Result<()> {
+    let name_slice = [field_name];
+    let resolved = fields::resolve_columns(&name_slice, client, STATIC_COLS).await?;
+    let col = &resolved[0];
+
+    let field_values =
+        fields::fetch_field_values(client, col, project.as_deref()).await?;
+
+    println!("Values for '{}':", col.label.bold());
+    println!("{}", "─".repeat(60));
+
+    let value_width = field_values.iter().map(|v| v.value.len()).max().unwrap_or(0);
+    for fv in &field_values {
+        match &fv.detail {
+            Some(d) => println!("  {:<width$}  {}", fv.value, d.dimmed(), width = value_width),
+            None    => println!("  {}", fv.value),
+        }
+    }
+
+    println!();
+    println!("{}", format!("{} values", field_values.len()).dimmed());
     Ok(())
 }
 
