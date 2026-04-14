@@ -5,7 +5,7 @@ mod client;
 mod commands;
 mod config;
 
-use commands::{instance, issue, project, search};
+use commands::{fields, instance, issue, project, search};
 
 #[derive(Parser)]
 #[command(
@@ -45,7 +45,8 @@ enum Commands {
     /// Search issues using JQL
     Search {
         /// JQL query string (e.g. 'project = PROJ AND status = "In Progress"')
-        jql: String,
+        #[arg(required_unless_present = "list_columns")]
+        jql: Option<String>,
         /// Maximum results to return
         #[arg(short, long, default_value = "25")]
         limit: u32,
@@ -78,12 +79,12 @@ async fn main() -> Result<()> {
             project::handle(command, &client).await?;
         }
         Commands::Search { jql, limit, columns, list_columns } => {
+            let (_, inst) = cfg.get_instance(cli.instance.as_deref())?;
+            let client = client::JiraClient::new(inst)?;
             if list_columns {
-                search::print_available_columns();
+                fields::print_columns(&client, fields::STATIC_COLS).await?;
             } else {
-                let (_, inst) = cfg.get_instance(cli.instance.as_deref())?;
-                let client = client::JiraClient::new(inst)?;
-                search::run_search(&client, &jql, limit, columns).await?;
+                search::run_search(&client, jql.as_deref().unwrap(), limit, columns).await?;
             }
         }
     }

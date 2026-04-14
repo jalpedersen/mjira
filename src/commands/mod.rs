@@ -1,3 +1,4 @@
+pub mod fields;
 pub mod instance;
 pub mod issue;
 pub mod project;

@@ -5,18 +5,9 @@ use serde_json::{json, Value};
 
 use crate::client::JiraClient;
 use super::{display_name, field_name, print_field, short_date, truncate};
+use super::fields::{self, ResolvedCol, STATIC_COLS};
 
-const AVAILABLE_COLUMNS: &[(&str, &str)] = &[
-    ("key",      "Issue key (e.g. PROJ-123)"),
-    ("type",     "Issue type (Bug, Story, Task, etc.)"),
-    ("status",   "Current status"),
-    ("assignee", "Assigned user"),
-    ("priority", "Priority level"),
-    ("updated",  "Last updated date"),
-    ("summary",  "Issue summary / title"),
-];
-
-const DEFAULT_COLUMNS: &str = "key,type,status,assignee,updated,summary";
+const DEFAULT_COLUMNS: &[&str] = &["key", "type", "status", "assignee", "updated", "summary"];
 
 #[derive(Subcommand)]
 pub enum IssueCommands {
@@ -142,26 +133,16 @@ async fn list(
     list_columns: bool,
 ) -> Result<()> {
     if list_columns {
-        println!("Available columns for 'issue list':");
-        for (name, desc) in AVAILABLE_COLUMNS {
-            println!("  {:<10} {}", name, desc);
-        }
-        return Ok(());
+        return fields::print_columns(client, STATIC_COLS).await;
     }
 
-    let active_cols: Vec<&str> = columns
+    let col_names: Vec<&str> = columns
         .as_deref()
-        .unwrap_or(DEFAULT_COLUMNS)
-        .split(',')
-        .map(str::trim)
-        .filter(|c| !c.is_empty())
-        .collect();
+        .map(|s| s.split(',').map(str::trim).filter(|c| !c.is_empty()).collect())
+        .unwrap_or_else(|| DEFAULT_COLUMNS.to_vec());
 
-    for col in &active_cols {
-        if !AVAILABLE_COLUMNS.iter().any(|(n, _)| *n == *col) {
-            bail!("Unknown column '{}'. Run with --list-columns to see options.", col);
-        }
-    }
+    let active_cols: Vec<ResolvedCol> =
+        fields::resolve_columns(&col_names, client, STATIC_COLS).await?;
 
     let mut clauses: Vec<String> = Vec::new();
 
@@ -192,19 +173,11 @@ async fn list(
     let fields_str = {
         let mut seen = std::collections::HashSet::new();
         let mut parts: Vec<&str> = Vec::new();
-        for &col in &active_cols {
-            let field = match col {
-                "key"      => continue,
-                "type"     => "issuetype",
-                "status"   => "status",
-                "assignee" => "assignee",
-                "priority" => "priority",
-                "updated"  => "updated",
-                "summary"  => "summary",
-                _          => continue,
-            };
-            if seen.insert(field) {
-                parts.push(field);
+        for col in &active_cols {
+            let id = col.api_id.as_str();
+            if id == "key" { continue; }
+            if seen.insert(id) {
+                parts.push(id);
             }
         }
         parts.join(",")
@@ -233,66 +206,65 @@ async fn list(
 
     // Header
     let last = active_cols.len().saturating_sub(1);
-    for (i, &col) in active_cols.iter().enumerate() {
-        let w = col_width(col);
+    for (i, col) in active_cols.iter().enumerate() {
+        let w = fields::col_width(col);
+        let header = fields::col_header(col);
         if i == last {
-            print!("{}", col_header(col).bold());
+            print!("{}", header.as_str().bold());
         } else {
-            print!("{:<w$} ", col_header(col).bold(), w = w);
+            print!("{:<w$} ", header.as_str().bold(), w = w);
         }
     }
     println!();
     println!("{}", "─".repeat(100));
 
+    // Rows
     for issue in issues {
         let key = issue["key"].as_str().unwrap_or("?");
         let f = &issue["fields"];
 
-        for (i, &col) in active_cols.iter().enumerate() {
+        for (i, col) in active_cols.iter().enumerate() {
             let is_last = i == last;
-            let w = col_width(col);
-            match col {
-                "key" => {
-                    if is_last { print!("{}", key.cyan()); }
-                    else { print!("{:<w$} ", key.cyan(), w = w); }
+            let w = fields::col_width(col);
+
+            if col.custom {
+                let raw = fields::extract_custom_value(&f[col.api_id.as_str()]);
+                let v = truncate(&raw, w.saturating_sub(1));
+                if is_last { print!("{}", v); } else { print!("{:<w$} ", v, w = w); }
+            } else {
+                match col.label.as_str() {
+                    "key" => {
+                        if is_last { print!("{}", key.cyan()); }
+                        else { print!("{:<w$} ", key.cyan(), w = w); }
+                    }
+                    "status" => {
+                        let v = truncate(field_name(f, "status"), w.saturating_sub(1));
+                        if is_last { print!("{}", fields::status_colored(&v)); }
+                        else { print!("{:<w$} ", fields::status_colored(&v), w = w); }
+                    }
+                    _ => {
+                        let v = cell_value(f, col, w);
+                        if is_last { print!("{}", v); } else { print!("{:<w$} ", v, w = w); }
+                    }
                 }
-                "type" => {
-                    let v = truncate(field_name(f, "issuetype"), w.saturating_sub(1));
-                    if is_last { print!("{}", v); }
-                    else { print!("{:<w$} ", v, w = w); }
-                }
-                "status" => {
-                    let raw = field_name(f, "status");
-                    let v = truncate(raw, w.saturating_sub(1));
-                    if is_last { print!("{}", status_colored(&v)); }
-                    else { print!("{:<w$} ", status_colored(&v), w = w); }
-                }
-                "assignee" => {
-                    let v = truncate(display_name(f, "assignee"), w.saturating_sub(1));
-                    if is_last { print!("{}", v); }
-                    else { print!("{:<w$} ", v, w = w); }
-                }
-                "priority" => {
-                    let v = truncate(field_name(f, "priority"), w.saturating_sub(1));
-                    if is_last { print!("{}", v); }
-                    else { print!("{:<w$} ", v, w = w); }
-                }
-                "updated" => {
-                    let v = short_date(f["updated"].as_str().unwrap_or(""));
-                    if is_last { print!("{}", v); }
-                    else { print!("{:<w$} ", v, w = w); }
-                }
-                "summary" => {
-                    let v = truncate(f["summary"].as_str().unwrap_or("(no summary)"), w.saturating_sub(1));
-                    if is_last { print!("{}", v); }
-                    else { print!("{:<w$} ", v, w = w); }
-                }
-                _ => {}
             }
         }
         println!();
     }
     Ok(())
+}
+
+/// Extract a plain-text cell value for non-key, non-status static columns.
+fn cell_value(f: &Value, col: &ResolvedCol, w: usize) -> String {
+    match col.label.as_str() {
+        "type"     => truncate(field_name(f, "issuetype"), w.saturating_sub(1)),
+        "assignee" => truncate(display_name(f, "assignee"), w.saturating_sub(1)),
+        "priority" => truncate(field_name(f, "priority"), w.saturating_sub(1)),
+        "updated"  => short_date(f["updated"].as_str().unwrap_or("")).to_string(),
+        "summary"  => truncate(f["summary"].as_str().unwrap_or("(no summary)"), w.saturating_sub(1)),
+        "project"  => truncate(field_name(f, "project"), w.saturating_sub(1)),
+        _          => truncate(field_name(f, col.api_id.as_str()), w.saturating_sub(1)),
+    }
 }
 
 // ── Get ─────────────────────────────────────────────────────────────────────
@@ -483,45 +455,4 @@ async fn assign(client: &JiraClient, key: &str, assignee: &str) -> Result<()> {
         println!("{} assigned to '{}' ✓", key.green(), assignee.bold());
     }
     Ok(())
-}
-
-// ── Helpers ──────────────────────────────────────────────────────────────────
-
-fn col_header(col: &str) -> &'static str {
-    match col {
-        "key"      => "KEY",
-        "type"     => "TYPE",
-        "status"   => "STATUS",
-        "assignee" => "ASSIGNEE",
-        "priority" => "PRIORITY",
-        "updated"  => "UPDATED",
-        "summary"  => "SUMMARY",
-        _          => "?",
-    }
-}
-
-fn col_width(col: &str) -> usize {
-    match col {
-        "key"      => 14,
-        "type"     => 12,
-        "status"   => 12,
-        "assignee" => 22,
-        "priority" => 10,
-        "updated"  => 10,
-        "summary"  => 60,
-        _          => 12,
-    }
-}
-
-fn status_colored(s: &str) -> colored::ColoredString {
-    let lower = s.to_lowercase();
-    if lower.contains("done") || lower.contains("closed") || lower.contains("resolved") {
-        s.green()
-    } else if lower.contains("progress") || lower.contains("review") {
-        s.yellow()
-    } else if lower.contains("blocked") {
-        s.red()
-    } else {
-        s.normal()
-    }
 }
