@@ -2,6 +2,7 @@ pub mod fields;
 pub mod instance;
 pub mod issue;
 pub mod project;
+pub mod query;
 pub mod search;
 
 use colored::Colorize;

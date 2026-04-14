@@ -48,12 +48,26 @@ impl Instance {
     }
 }
 
+/// A predefined JQL search with optional defaults for limit and columns.
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct Query {
+    /// JQL query string
+    pub jql: String,
+    /// Maximum results (overrides the CLI default of 25)
+    pub limit: Option<u32>,
+    /// Comma-separated columns to display (overrides the default set)
+    pub columns: Option<String>,
+}
+
 #[derive(Debug, Deserialize, Serialize, Default)]
 pub struct Config {
     /// Name of the instance to use when --instance is not specified
     pub default_instance: Option<String>,
     #[serde(default)]
     pub instances: HashMap<String, Instance>,
+    /// Named JQL queries, runnable with `jira query <name>`
+    #[serde(default)]
+    pub queries: HashMap<String, Query>,
 }
 
 impl Config {

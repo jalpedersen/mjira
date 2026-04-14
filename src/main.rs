@@ -5,7 +5,7 @@ mod client;
 mod commands;
 mod config;
 
-use commands::{fields, instance, issue, project, search};
+use commands::{fields, instance, issue, project, query, search};
 
 #[derive(Parser)]
 #[command(
@@ -57,6 +57,20 @@ enum Commands {
         #[arg(long)]
         list_columns: bool,
     },
+    /// Run a saved query from the config file (omit name to list all)
+    Query {
+        /// Name of the saved query to run
+        name: Option<String>,
+        /// Override the result limit
+        #[arg(short, long)]
+        limit: Option<u32>,
+        /// Override the columns to display
+        #[arg(short = 'c', long)]
+        columns: Option<String>,
+        /// Print available columns and exit
+        #[arg(long)]
+        list_columns: bool,
+    },
 }
 
 #[tokio::main]
@@ -85,6 +99,20 @@ async fn main() -> Result<()> {
                 fields::print_columns(&client, fields::STATIC_COLS).await?;
             } else {
                 search::run_search(&client, jql.as_deref().unwrap(), limit, columns).await?;
+            }
+        }
+        Commands::Query { name, limit, columns, list_columns } => {
+            match name {
+                None => query::list(&cfg.queries),
+                Some(name) => {
+                    let (_, inst) = cfg.get_instance(cli.instance.as_deref())?;
+                    let client = client::JiraClient::new(inst)?;
+                    if list_columns {
+                        fields::print_columns(&client, fields::STATIC_COLS).await?;
+                    } else {
+                        query::run(&client, &cfg.queries, &name, limit, columns).await?;
+                    }
+                }
             }
         }
     }

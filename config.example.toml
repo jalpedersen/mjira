@@ -18,3 +18,26 @@ url          = "https://jira.internal.example.com"
 username     = "john.doe"
 password     = "s3cr3t"
 api_version  = 2
+
+# ── Saved queries ─────────────────────────────────────────────────────────────
+# Run with: jira query <name>
+# List all: jira query
+#
+# Each query requires a `jql` field. `limit` and `columns` are optional and
+# can be overridden at runtime with --limit / --columns.
+
+[queries.my-work]
+jql = "assignee = currentUser() AND status != Done ORDER BY updated DESC"
+
+[queries.blocked]
+jql     = "status = Blocked ORDER BY priority DESC"
+limit   = 50
+
+[queries.review]
+jql     = "status = \"In Review\" ORDER BY updated DESC"
+columns = "key,type,status,assignee,summary"
+
+[queries.release]
+jql     = "fixVersions = '2.0.0' AND status != Done ORDER BY priority DESC"
+limit   = 100
+columns = "key,type,status,assignee,priority,summary"
