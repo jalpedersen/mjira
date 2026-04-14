@@ -1,0 +1,20 @@
+# jira-cli configuration — copy to ~/.config/jira-cli/config.toml
+#
+# Manage multiple Jira instances under [instances.<alias>].
+# The alias is used with the --instance flag or set as the default below.
+
+default_instance = "cloud"
+
+# ── Jira Cloud (API token) ───────────────────────────────────────────────────
+[instances.cloud]
+url          = "https://mycompany.atlassian.net"
+username     = "user@mycompany.com"
+api_key      = "ATATT3xFfGF0..."   # https://id.atlassian.com/manage-profile/security/api-tokens
+api_version  = 2                    # 2 (default) or 3
+
+# ── Jira Server / Data Center (username + password) ──────────────────────────
+[instances.server]
+url          = "https://jira.internal.example.com"
+username     = "john.doe"
+password     = "s3cr3t"
+api_version  = 2
