@@ -246,7 +246,7 @@ async fn list(
     }
     if !any_assignee {
         if let Some(a) = assignee.as_deref().or(instance.default_assignee.as_deref()) {
-            clauses.push(format!("assignee = \"{}\"", a));
+            clauses.push(format!("assignee = {}", a));
         }
     }
     if let Some(s) = status {
@@ -282,7 +282,9 @@ async fn list(
         ("maxResults", max.as_str()),
         ("fields", fields_str.as_str()),
     ];
-    let result: Value = client.get_with_params(client.search_path(), &params).await?;
+    let result: Value = client
+        .get_with_params(client.search_path(), &params)
+        .await?;
     let issues = result["issues"]
         .as_array()
         .map(|v| v.as_slice())
@@ -506,7 +508,9 @@ async fn get(client: &JiraClient, key: &str) -> Result<()> {
     // Description
     println!();
     println!("{}", "Description:".bold());
-    let desc_text = f["description"].as_str().map(|s| s.to_string())
+    let desc_text = f["description"]
+        .as_str()
+        .map(|s| s.to_string())
         .or_else(|| adf_to_text(&f["description"]));
     match desc_text.as_deref() {
         Some(desc) if !desc.is_empty() => println!("{}", desc),
@@ -527,7 +531,9 @@ async fn get(client: &JiraClient, key: &str) -> Result<()> {
             for c in comments {
                 let author = c["author"]["displayName"].as_str().unwrap_or("?");
                 let created = short_date(c["created"].as_str().unwrap_or(""));
-                let body_owned = c["body"].as_str().map(|s| s.to_string())
+                let body_owned = c["body"]
+                    .as_str()
+                    .map(|s| s.to_string())
                     .or_else(|| adf_to_text(&c["body"]))
                     .unwrap_or_default();
                 let body = body_owned.as_str();
@@ -1026,7 +1032,11 @@ fn adf_to_text(node: &Value) -> Option<String> {
     }
     let mut out = String::new();
     collect_adf_text(node, &mut out);
-    if out.is_empty() { None } else { Some(out.trim_end().to_string()) }
+    if out.is_empty() {
+        None
+    } else {
+        Some(out.trim_end().to_string())
+    }
 }
 
 fn collect_adf_text(node: &Value, out: &mut String) {
@@ -1107,9 +1117,17 @@ fn show_commit_diff(repo_path: &str, hash: &str) {
 
 async fn assign(client: &JiraClient, key: &str, assignee: &str) -> Result<()> {
     let body = if client.api_version() >= 3 {
-        if assignee == "-" { json!({ "accountId": null }) } else { json!({ "accountId": assignee }) }
+        if assignee == "-" {
+            json!({ "accountId": null })
+        } else {
+            json!({ "accountId": assignee })
+        }
     } else {
-        if assignee == "-" { json!({ "name": null }) } else { json!({ "name": assignee }) }
+        if assignee == "-" {
+            json!({ "name": null })
+        } else {
+            json!({ "name": assignee })
+        }
     };
     client
         .put_no_body(&format!("issue/{key}/assignee"), &body)
