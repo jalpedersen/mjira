@@ -469,8 +469,8 @@ async fn get(client: &JiraClient, key: &str) -> Result<()> {
     print_field("Project", field_name(f, "project"));
     print_field("Assignee", display_name(f, "assignee"));
     print_field("Reporter", display_name(f, "reporter"));
-    print_field("Created", short_date(f["created"].as_str().unwrap_or("")));
-    print_field("Updated", short_date(f["updated"].as_str().unwrap_or("")));
+    print_field("Created", f["created"].as_str().unwrap_or(""));
+    print_field("Updated", f["updated"].as_str().unwrap_or(""));
 
     // Labels
     if let Some(labels) = f["labels"].as_array() {
@@ -530,7 +530,7 @@ async fn get(client: &JiraClient, key: &str) -> Result<()> {
             println!("{}", "─".repeat(80));
             for c in comments {
                 let author = c["author"]["displayName"].as_str().unwrap_or("?");
-                let created = short_date(c["created"].as_str().unwrap_or(""));
+                let created = c["created"].as_str().unwrap_or("");
                 let body_owned = c["body"]
                     .as_str()
                     .map(|s| s.to_string())
@@ -578,7 +578,7 @@ async fn get(client: &JiraClient, key: &str) -> Result<()> {
             for (date, actor, to) in &assignee_events {
                 println!(
                     "{}  {} assigned to {}",
-                    short_date(date).dimmed(),
+                    date.as_str().dimmed(),
                     actor.bold(),
                     to.cyan()
                 );
