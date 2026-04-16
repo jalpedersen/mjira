@@ -101,6 +101,23 @@ pub enum IssueCommands {
         /// Additional repository paths to search (supplements config repos)
         #[arg(short, long = "repo")]
         repos: Vec<String>,
+        /// Show repos with no commits found
+        #[arg(short, long)]
+        verbose: bool,
+    },
+    /// Show git diff for commits mentioning an issue key
+    Diff {
+        /// Issue key (e.g. PROJ-123)
+        key: String,
+        /// Show diff for a specific commit hash only
+        #[arg(short, long)]
+        commit: Option<String>,
+        /// Additional repository paths to search (supplements config repos)
+        #[arg(short, long = "repo")]
+        repos: Vec<String>,
+        /// Show repos with no commits found
+        #[arg(short, long)]
+        verbose: bool,
     },
 }
 
@@ -136,8 +153,12 @@ pub async fn handle(cmd: IssueCommands, client: &JiraClient, instance: &Instance
 
         IssueCommands::Values { field, project } => values(client, &field, project).await,
 
-        IssueCommands::Commits { key, repos } => {
-            commits(client, instance, &key, repos).await
+        IssueCommands::Commits { key, repos, verbose } => {
+            commits(client, instance, &key, repos, verbose).await
+        }
+
+        IssueCommands::Diff { key, commit, repos, verbose } => {
+            diff(client, instance, &key, commit.as_deref(), repos, verbose).await
         }
     }
 }
@@ -547,6 +568,7 @@ async fn commits(
     instance: &Instance,
     key: &str,
     extra_repos: Vec<String>,
+    verbose: bool,
 ) -> Result<()> {
     // Fetch the issue's components to look up component-specific repos.
     let issue: Value = client
@@ -609,13 +631,10 @@ async fn commits(
     }
 
     for repo_path in &repos {
-        println!();
         let display = std::path::Path::new(repo_path)
             .file_name()
             .and_then(|n| n.to_str())
             .unwrap_or(repo_path.as_str());
-        println!("{} {}", display.bold(), repo_path.dimmed());
-        println!("{}", "─".repeat(80));
 
         let output = std::process::Command::new("git")
             .args([
@@ -630,18 +649,32 @@ async fn commits(
 
         match output {
             Err(e) => {
+                println!();
+                println!("{} {}", display.bold(), repo_path.dimmed());
+                println!("{}", "─".repeat(80));
                 println!("  {} {}", "error:".red(), e);
             }
             Ok(out) if !out.status.success() => {
                 let msg = String::from_utf8_lossy(&out.stderr);
+                println!();
+                println!("{} {}", display.bold(), repo_path.dimmed());
+                println!("{}", "─".repeat(80));
                 println!("  {} {}", "git error:".red(), msg.trim());
             }
             Ok(out) => {
                 let stdout = String::from_utf8_lossy(&out.stdout);
                 let lines: Vec<&str> = stdout.lines().collect();
                 if lines.is_empty() {
-                    println!("  {}", "(no commits found)".dimmed());
+                    if verbose {
+                        println!();
+                        println!("{} {}", display.bold(), repo_path.dimmed());
+                        println!("{}", "─".repeat(80));
+                        println!("  {}", "(no commits found)".dimmed());
+                    }
                 } else {
+                    println!();
+                    println!("{} {}", display.bold(), repo_path.dimmed());
+                    println!("{}", "─".repeat(80));
                     for line in &lines {
                         let parts: Vec<&str> = line.splitn(4, '\t').collect();
                         match parts.as_slice() {
@@ -666,6 +699,170 @@ async fn commits(
 
     println!();
     Ok(())
+}
+
+// ── Diff ─────────────────────────────────────────────────────────────────────
+
+async fn diff(
+    client: &JiraClient,
+    instance: &Instance,
+    key: &str,
+    commit: Option<&str>,
+    extra_repos: Vec<String>,
+    verbose: bool,
+) -> Result<()> {
+    let issue: Value = client
+        .get(&format!("issue/{key}?fields=components,summary"))
+        .await?;
+    let f = &issue["fields"];
+
+    let component_names: Vec<&str> = f["components"]
+        .as_array()
+        .map(|arr| arr.iter().filter_map(|c| c["name"].as_str()).collect())
+        .unwrap_or_default();
+
+    let mut repos: Vec<String> = {
+        let mapped: Vec<String> = component_names
+            .iter()
+            .filter_map(|name| instance.component_repos.get(*name).cloned())
+            .collect();
+
+        let mut seen = std::collections::HashSet::new();
+        let mut deduped: Vec<String> = Vec::new();
+        for r in mapped {
+            if seen.insert(r.clone()) {
+                deduped.push(r);
+            }
+        }
+
+        if deduped.is_empty() {
+            instance.repos.clone()
+        } else {
+            deduped
+        }
+    };
+
+    let mut seen: std::collections::HashSet<String> = repos.iter().cloned().collect();
+    for r in extra_repos {
+        if seen.insert(r.clone()) {
+            repos.push(r);
+        }
+    }
+
+    if repos.is_empty() {
+        println!("No repositories configured. Add repos or component_repos to the instance in config, or use --repo.");
+        return Ok(());
+    }
+
+    let summary = f["summary"].as_str().unwrap_or("");
+    println!();
+    println!("Diff for {}", key.cyan().bold());
+    if !summary.is_empty() {
+        println!("{}", summary.dimmed());
+    }
+
+    for repo_path in &repos {
+        let display = std::path::Path::new(repo_path)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or(repo_path.as_str());
+
+        if let Some(hash) = commit {
+            // Show diff for a single specific commit.
+            println!();
+            println!("{} {} — {}", display.bold(), repo_path.dimmed(), hash.yellow());
+            println!("{}", "─".repeat(80));
+            show_commit_diff(repo_path, hash);
+        } else {
+            // Find all commits mentioning the key and show each diff.
+            let output = std::process::Command::new("git")
+                .args([
+                    "-C",
+                    repo_path,
+                    "log",
+                    "--all",
+                    "--format=%H\t%as\t%an\t%s",
+                    &format!("--grep={}", key),
+                ])
+                .output();
+
+            match output {
+                Err(e) => {
+                    println!();
+                    println!("{} {} {}", display.bold(), repo_path.dimmed(), format!("error: {e}").red());
+                }
+                Ok(out) if !out.status.success() => {
+                    let msg = String::from_utf8_lossy(&out.stderr);
+                    println!();
+                    println!("{} {} {}", display.bold(), repo_path.dimmed(), format!("git error: {}", msg.trim()).red());
+                }
+                Ok(out) => {
+                    let stdout = String::from_utf8_lossy(&out.stdout);
+                    let lines: Vec<&str> = stdout.lines().collect();
+                    if lines.is_empty() {
+                        if verbose {
+                            println!();
+                            println!("{} {}", display.bold(), repo_path.dimmed());
+                            println!("{}", "─".repeat(80));
+                            println!("  {}", "(no commits found)".dimmed());
+                        }
+                    } else {
+                        for line in &lines {
+                            let parts: Vec<&str> = line.splitn(4, '\t').collect();
+                            match parts.as_slice() {
+                                [hash, date, author, subject] => {
+                                    println!();
+                                    println!(
+                                        "{} {}  {}  {}  {}",
+                                        display.bold(),
+                                        repo_path.dimmed(),
+                                        hash[..8.min(hash.len())].yellow(),
+                                        date.dimmed(),
+                                        author.bold()
+                                    );
+                                    println!("  {}", subject);
+                                    println!("{}", "─".repeat(80));
+                                    show_commit_diff(repo_path, hash);
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    println!();
+    Ok(())
+}
+
+fn show_commit_diff(repo_path: &str, hash: &str) {
+    let output = std::process::Command::new("git")
+        .args(["-C", repo_path, "show", "--stat", "--patch", hash])
+        .output();
+
+    match output {
+        Err(e) => println!("  {} {}", "error:".red(), e),
+        Ok(out) if !out.status.success() => {
+            let msg = String::from_utf8_lossy(&out.stderr);
+            println!("  {} {}", "git error:".red(), msg.trim());
+        }
+        Ok(out) => {
+            let text = String::from_utf8_lossy(&out.stdout);
+            for line in text.lines() {
+                if line.starts_with('+') && !line.starts_with("+++") {
+                    println!("{}", line.green());
+                } else if line.starts_with('-') && !line.starts_with("---") {
+                    println!("{}", line.red());
+                } else if line.starts_with("@@") {
+                    println!("{}", line.cyan());
+                } else {
+                    println!("{}", line);
+                }
+            }
+        }
+    }
 }
 
 // ── Assign ───────────────────────────────────────────────────────────────────
