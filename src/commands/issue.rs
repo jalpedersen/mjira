@@ -3,12 +3,21 @@ use clap::Subcommand;
 use colored::Colorize;
 use serde_json::{json, Value};
 
+use super::fields::{self, ResolvedCol, STATIC_COLS};
+use super::{display_name, field_name, print_field, short_date, truncate};
 use crate::client::JiraClient;
 use crate::config::Instance;
-use super::{display_name, field_name, print_field, short_date, truncate};
-use super::fields::{self, ResolvedCol, STATIC_COLS};
 
-const DEFAULT_COLUMNS: &[&str] = &["key", "type", "status", "assignee", "updated", "summary"];
+const DEFAULT_COLUMNS: &[&str] = &[
+    "key",
+    "parent",
+    "type",
+    "status",
+    "assignee",
+    "updated",
+    "components",
+    "summary",
+];
 
 #[derive(Subcommand)]
 pub enum IssueCommands {
@@ -17,9 +26,12 @@ pub enum IssueCommands {
         /// Filter by project key (e.g. PROJ)
         #[arg(short, long)]
         project: Option<String>,
-        /// Filter by assignee username/email; use "me" for yourself
+        /// Filter by assignee username/email
         #[arg(short, long)]
         assignee: Option<String>,
+        /// Show issues for all assignees (clears the default assignee filter)
+        #[arg(long)]
+        any_assignee: bool,
         /// Filter by status (e.g. "In Progress", "To Do")
         #[arg(short, long)]
         status: Option<String>,
@@ -126,13 +138,29 @@ pub async fn handle(cmd: IssueCommands, client: &JiraClient, instance: &Instance
         IssueCommands::List {
             project,
             assignee,
+            any_assignee,
             status,
             issue_type,
             jql,
             limit,
             columns,
             list_columns,
-        } => list(client, project, assignee, status, issue_type, jql, limit, columns, list_columns).await,
+        } => {
+            list(
+                client,
+                instance,
+                project,
+                assignee,
+                any_assignee,
+                status,
+                issue_type,
+                jql,
+                limit,
+                columns,
+                list_columns,
+            )
+            .await
+        }
 
         IssueCommands::Get { key } => get(client, &key).await,
 
@@ -143,7 +171,18 @@ pub async fn handle(cmd: IssueCommands, client: &JiraClient, instance: &Instance
             description,
             priority,
             assignee,
-        } => create(client, &project, &summary, &issue_type, description, priority, assignee).await,
+        } => {
+            create(
+                client,
+                &project,
+                &summary,
+                &issue_type,
+                description,
+                priority,
+                assignee,
+            )
+            .await
+        }
 
         IssueCommands::Comment { key, body } => comment(client, &key, &body).await,
 
@@ -153,13 +192,18 @@ pub async fn handle(cmd: IssueCommands, client: &JiraClient, instance: &Instance
 
         IssueCommands::Values { field, project } => values(client, &field, project).await,
 
-        IssueCommands::Commits { key, repos, verbose } => {
-            commits(client, instance, &key, repos, verbose).await
-        }
+        IssueCommands::Commits {
+            key,
+            repos,
+            verbose,
+        } => commits(client, instance, &key, repos, verbose).await,
 
-        IssueCommands::Diff { key, commit, repos, verbose } => {
-            diff(client, instance, &key, commit.as_deref(), repos, verbose).await
-        }
+        IssueCommands::Diff {
+            key,
+            commit,
+            repos,
+            verbose,
+        } => diff(client, instance, &key, commit.as_deref(), repos, verbose).await,
     }
 }
 
@@ -167,8 +211,10 @@ pub async fn handle(cmd: IssueCommands, client: &JiraClient, instance: &Instance
 
 async fn list(
     client: &JiraClient,
+    instance: &Instance,
     project: Option<String>,
     assignee: Option<String>,
+    any_assignee: bool,
     status: Option<String>,
     issue_type: Option<String>,
     extra_jql: Option<String>,
@@ -182,7 +228,12 @@ async fn list(
 
     let col_names: Vec<&str> = columns
         .as_deref()
-        .map(|s| s.split(',').map(str::trim).filter(|c| !c.is_empty()).collect())
+        .map(|s| {
+            s.split(',')
+                .map(str::trim)
+                .filter(|c| !c.is_empty())
+                .collect()
+        })
         .unwrap_or_else(|| DEFAULT_COLUMNS.to_vec());
 
     let active_cols: Vec<ResolvedCol> =
@@ -193,10 +244,10 @@ async fn list(
     if let Some(proj) = project {
         clauses.push(format!("project = \"{}\"", proj));
     }
-    match assignee.as_deref() {
-        Some("me") => clauses.push("assignee = currentUser()".into()),
-        Some(a) => clauses.push(format!("assignee = \"{}\"", a)),
-        None => {}
+    if !any_assignee {
+        if let Some(a) = assignee.as_deref().or(instance.default_assignee.as_deref()) {
+            clauses.push(format!("assignee = \"{}\"", a));
+        }
     }
     if let Some(s) = status {
         clauses.push(format!("status = \"{}\"", s));
@@ -208,18 +259,16 @@ async fn list(
         clauses.push(j);
     }
 
-    let jql = if clauses.is_empty() {
-        "assignee = currentUser() ORDER BY updated DESC".to_string()
-    } else {
-        format!("{} ORDER BY updated DESC", clauses.join(" AND "))
-    };
+    let jql = format!("{} ORDER BY updated DESC", clauses.join(" AND "));
 
     let fields_str = {
         let mut seen = std::collections::HashSet::new();
         let mut parts: Vec<&str> = Vec::new();
         for col in &active_cols {
             let id = col.api_id.as_str();
-            if id == "key" { continue; }
+            if id == "key" {
+                continue;
+            }
             if seen.insert(id) {
                 parts.push(id);
             }
@@ -234,7 +283,10 @@ async fn list(
         ("fields", fields_str.as_str()),
     ];
     let result: Value = client.get_with_params("search", &params).await?;
-    let issues = result["issues"].as_array().map(|v| v.as_slice()).unwrap_or(&[]);
+    let issues = result["issues"]
+        .as_array()
+        .map(|v| v.as_slice())
+        .unwrap_or(&[]);
 
     if issues.is_empty() {
         println!("No issues found.");
@@ -274,21 +326,35 @@ async fn list(
             if col.custom {
                 let raw = fields::extract_custom_value(&f[col.api_id.as_str()]);
                 let v = truncate(&raw, w.saturating_sub(1));
-                if is_last { print!("{}", v); } else { print!("{:<w$} ", v, w = w); }
+                if is_last {
+                    print!("{}", v);
+                } else {
+                    print!("{:<w$} ", v, w = w);
+                }
             } else {
                 match col.label.as_str() {
                     "key" => {
-                        if is_last { print!("{}", key.cyan()); }
-                        else { print!("{:<w$} ", key.cyan(), w = w); }
+                        if is_last {
+                            print!("{}", key.cyan());
+                        } else {
+                            print!("{:<w$} ", key.cyan(), w = w);
+                        }
                     }
                     "status" => {
                         let v = truncate(field_name(f, "status"), w.saturating_sub(1));
-                        if is_last { print!("{}", fields::status_colored(&v)); }
-                        else { print!("{:<w$} ", fields::status_colored(&v), w = w); }
+                        if is_last {
+                            print!("{}", fields::status_colored(&v));
+                        } else {
+                            print!("{:<w$} ", fields::status_colored(&v), w = w);
+                        }
                     }
                     _ => {
                         let v = cell_value(f, col, w);
-                        if is_last { print!("{}", v); } else { print!("{:<w$} ", v, w = w); }
+                        if is_last {
+                            print!("{}", v);
+                        } else {
+                            print!("{:<w$} ", v, w = w);
+                        }
                     }
                 }
             }
@@ -305,19 +371,27 @@ async fn values(client: &JiraClient, field_name: &str, project: Option<String>) 
     let resolved = fields::resolve_columns(&name_slice, client, STATIC_COLS).await?;
     let col = &resolved[0];
 
-    let mut field_values =
-        fields::fetch_field_values(client, col, project.as_deref()).await?;
+    let mut field_values = fields::fetch_field_values(client, col, project.as_deref()).await?;
 
     field_values.sort_by(|a, b| a.value.cmp(&b.value));
 
     println!("Values for '{}':", col.label.bold());
     println!("{}", "─".repeat(60));
 
-    let value_width = field_values.iter().map(|v| v.value.len()).max().unwrap_or(0);
+    let value_width = field_values
+        .iter()
+        .map(|v| v.value.len())
+        .max()
+        .unwrap_or(0);
     for fv in &field_values {
         match &fv.detail {
-            Some(d) => println!("  {:<width$}  {}", fv.value, d.dimmed(), width = value_width),
-            None    => println!("  {}", fv.value),
+            Some(d) => println!(
+                "  {:<width$}  {}",
+                fv.value,
+                d.dimmed(),
+                width = value_width
+            ),
+            None => println!("  {}", fv.value),
         }
     }
 
@@ -329,13 +403,42 @@ async fn values(client: &JiraClient, field_name: &str, project: Option<String>) 
 /// Extract a plain-text cell value for non-key, non-status static columns.
 fn cell_value(f: &Value, col: &ResolvedCol, w: usize) -> String {
     match col.label.as_str() {
-        "type"     => truncate(field_name(f, "issuetype"), w.saturating_sub(1)),
+        "type" => truncate(field_name(f, "issuetype"), w.saturating_sub(1)),
         "assignee" => truncate(display_name(f, "assignee"), w.saturating_sub(1)),
         "priority" => truncate(field_name(f, "priority"), w.saturating_sub(1)),
-        "updated"  => short_date(f["updated"].as_str().unwrap_or("")).to_string(),
-        "summary"  => truncate(f["summary"].as_str().unwrap_or("(no summary)"), w.saturating_sub(1)),
-        "project"  => truncate(field_name(f, "project"), w.saturating_sub(1)),
-        _          => truncate(field_name(f, col.api_id.as_str()), w.saturating_sub(1)),
+        "updated" => short_date(f["updated"].as_str().unwrap_or("")).to_string(),
+        "summary" => truncate(
+            f["summary"].as_str().unwrap_or("(no summary)"),
+            w.saturating_sub(1),
+        ),
+        "project" => truncate(field_name(f, "project"), w.saturating_sub(1)),
+        "parent" => truncate(
+            f["parent"]["key"].as_str().unwrap_or("—"),
+            w.saturating_sub(1),
+        ),
+        "components" => {
+            let names: Vec<&str> = f["components"]
+                .as_array()
+                .map(|arr| arr.iter().filter_map(|c| c["name"].as_str()).collect())
+                .unwrap_or_default();
+            let joined = names.join(", ");
+            truncate(
+                if names.is_empty() { "—" } else { &joined },
+                w.saturating_sub(1),
+            )
+        }
+        "labels" => {
+            let labels: Vec<&str> = f["labels"]
+                .as_array()
+                .map(|arr| arr.iter().filter_map(|l| l.as_str()).collect())
+                .unwrap_or_default();
+            let joined = labels.join(", ");
+            truncate(
+                if labels.is_empty() { "—" } else { &joined },
+                w.saturating_sub(1),
+            )
+        }
+        _ => truncate(field_name(f, col.api_id.as_str()), w.saturating_sub(1)),
     }
 }
 
@@ -350,19 +453,22 @@ async fn get(client: &JiraClient, key: &str) -> Result<()> {
     let display_key = issue["key"].as_str().unwrap_or(key);
 
     println!();
-    println!("{} — {}", display_key.cyan().bold(),
-        f["summary"].as_str().unwrap_or("(no summary)").bold());
+    println!(
+        "{} — {}",
+        display_key.cyan().bold(),
+        f["summary"].as_str().unwrap_or("(no summary)").bold()
+    );
     println!("{}", "─".repeat(80));
     print_field("URL", &client.browse_url(display_key));
 
-    print_field("Type",     field_name(f, "issuetype"));
-    print_field("Status",   field_name(f, "status"));
+    print_field("Type", field_name(f, "issuetype"));
+    print_field("Status", field_name(f, "status"));
     print_field("Priority", field_name(f, "priority"));
-    print_field("Project",  field_name(f, "project"));
+    print_field("Project", field_name(f, "project"));
     print_field("Assignee", display_name(f, "assignee"));
     print_field("Reporter", display_name(f, "reporter"));
-    print_field("Created",  short_date(f["created"].as_str().unwrap_or("")));
-    print_field("Updated",  short_date(f["updated"].as_str().unwrap_or("")));
+    print_field("Created", short_date(f["created"].as_str().unwrap_or("")));
+    print_field("Updated", short_date(f["updated"].as_str().unwrap_or("")));
 
     // Labels
     if let Some(labels) = f["labels"].as_array() {
@@ -384,7 +490,11 @@ async fn get(client: &JiraClient, key: &str) -> Result<()> {
     if let Some(attachments) = f["attachment"].as_array() {
         if !attachments.is_empty() {
             println!();
-            println!("{} ({})", "Attachments:".bold(), attachments.len().to_string().dimmed());
+            println!(
+                "{} ({})",
+                "Attachments:".bold(),
+                attachments.len().to_string().dimmed()
+            );
             for a in attachments {
                 let filename = a["filename"].as_str().unwrap_or("?");
                 let url = a["content"].as_str().unwrap_or("");
@@ -430,14 +540,20 @@ async fn get(client: &JiraClient, key: &str) -> Result<()> {
             .iter()
             .flat_map(|h| {
                 let date = h["created"].as_str().unwrap_or("").to_string();
-                let actor = h["author"]["displayName"].as_str().unwrap_or("?").to_string();
+                let actor = h["author"]["displayName"]
+                    .as_str()
+                    .unwrap_or("?")
+                    .to_string();
                 h["items"]
                     .as_array()
                     .into_iter()
                     .flatten()
                     .filter(|item| item["field"].as_str() == Some("assignee"))
                     .map(|item| {
-                        let to = item["toString"].as_str().unwrap_or("(unassigned)").to_string();
+                        let to = item["toString"]
+                            .as_str()
+                            .unwrap_or("(unassigned)")
+                            .to_string();
                         (date.clone(), actor.clone(), to)
                     })
                     .collect::<Vec<_>>()
@@ -624,10 +740,7 @@ async fn commits(
         println!("{}", summary.dimmed());
     }
     if !component_names.is_empty() {
-        println!(
-            "Components: {}",
-            component_names.join(", ").bold()
-        );
+        println!("Components: {}", component_names.join(", ").bold());
     }
 
     for repo_path in &repos {
@@ -783,7 +896,13 @@ async fn diff(
                 format!("  [{}]", branches.join(", "))
             };
             println!();
-            println!("{} {} — {}{}", display.bold(), repo_path.dimmed(), hash.yellow(), branch_str.magenta());
+            println!(
+                "{} {} — {}{}",
+                display.bold(),
+                repo_path.dimmed(),
+                hash.yellow(),
+                branch_str.magenta()
+            );
             println!("{}", "─".repeat(80));
             show_commit_diff(repo_path, hash);
         } else {
@@ -802,12 +921,22 @@ async fn diff(
             match output {
                 Err(e) => {
                     println!();
-                    println!("{} {} {}", display.bold(), repo_path.dimmed(), format!("error: {e}").red());
+                    println!(
+                        "{} {} {}",
+                        display.bold(),
+                        repo_path.dimmed(),
+                        format!("error: {e}").red()
+                    );
                 }
                 Ok(out) if !out.status.success() => {
                     let msg = String::from_utf8_lossy(&out.stderr);
                     println!();
-                    println!("{} {} {}", display.bold(), repo_path.dimmed(), format!("git error: {}", msg.trim()).red());
+                    println!(
+                        "{} {} {}",
+                        display.bold(),
+                        repo_path.dimmed(),
+                        format!("git error: {}", msg.trim()).red()
+                    );
                 }
                 Ok(out) => {
                     let stdout = String::from_utf8_lossy(&out.stdout);

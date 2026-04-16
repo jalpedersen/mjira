@@ -85,6 +85,7 @@ pub async fn handle(cmd: InstanceCommands, mut cfg: Config) -> Result<()> {
                     password,
                     pat: None,
                     api_version,
+                    default_assignee: None,
                     repos: Vec::new(),
                     component_repos: std::collections::HashMap::new(),
                 },

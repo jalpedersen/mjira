@@ -19,6 +19,9 @@ pub struct Instance {
     /// REST API version to use (default: 2)
     #[serde(default = "default_api_version")]
     pub api_version: u8,
+    /// Default assignee filter for `issue list` when --assignee is not specified.
+    /// Use "me" for the current user, or a username / account ID.
+    pub default_assignee: Option<String>,
     /// Local git repository paths to search when running `issue commits`
     #[serde(default)]
     pub repos: Vec<String>,

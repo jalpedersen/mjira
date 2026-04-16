@@ -63,6 +63,9 @@ pub const STATIC_COLS: &[(&str, &str, &str)] = &[
     ("updated",  "updated",   "Last updated date"),
     ("summary",  "summary",   "Issue summary / title"),
     ("project",  "project",   "Project name"),
+    ("parent",     "parent",     "Parent issue key"),
+    ("components", "components", "Components"),
+    ("labels",     "labels",     "Labels"),
 ];
 
 // ── Network ───────────────────────────────────────────────────────────────────
@@ -361,7 +364,10 @@ pub fn col_width(col: &ResolvedCol) -> usize {
         "updated"  => 10,
         "summary"  => 60,
         "project"  => 14,
-        _          => 15,
+        "parent"     => 14,
+        "components" => 20,
+        "labels"     => 20,
+        _            => 15,
     }
 }
 
