@@ -1,4 +1,4 @@
-# jira-cli configuration — copy to ~/.config/jira-cli/config.toml
+# mjira configuration — copy to ~/.config/mjira/config.toml
 #
 # Manage multiple Jira instances under [instances.<alias>].
 # The alias is used with the --instance flag or set as the default below.

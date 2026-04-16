@@ -1,5 +1,5 @@
 [package]
-name = "jira-cli"
+name = "mjira"
 version = "0.1.0"
 edition = "2021"
 
