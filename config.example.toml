@@ -12,6 +12,15 @@ username     = "user@mycompany.com"
 api_key      = "ATATT3xFfGF0..."   # https://id.atlassian.com/manage-profile/security/api-tokens
 api_version  = 2                    # 2 (default) or 3
 
+# Optional: git repos to search when running `issue commits`.
+# `repos` is a fallback list; `component_repos` maps Jira component names to
+# specific repo paths and takes priority when the issue has matching components.
+repos            = ["/home/user/projects/backend", "/home/user/projects/frontend"]
+[instances.cloud.component_repos]
+"backend"  = "/home/user/projects/backend"
+"frontend" = "/home/user/projects/frontend"
+"mobile"   = "/home/user/projects/mobile"
+
 # ── Jira Server / Data Center (username + password) ──────────────────────────
 [instances.server]
 url          = "https://jira.internal.example.com"

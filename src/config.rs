@@ -19,6 +19,13 @@ pub struct Instance {
     /// REST API version to use (default: 2)
     #[serde(default = "default_api_version")]
     pub api_version: u8,
+    /// Local git repository paths to search when running `issue commits`
+    #[serde(default)]
+    pub repos: Vec<String>,
+    /// Map from Jira component name to git repository path.
+    /// When an issue has components, the mapped repos are used instead of `repos`.
+    #[serde(default)]
+    pub component_repos: HashMap<String, String>,
 }
 
 fn default_api_version() -> u8 {

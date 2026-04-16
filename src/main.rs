@@ -85,7 +85,7 @@ async fn main() -> Result<()> {
         Commands::Issue { command } => {
             let (_, inst) = cfg.get_instance(cli.instance.as_deref())?;
             let client = client::JiraClient::new(inst)?;
-            issue::handle(command, &client).await?;
+            issue::handle(command, &client, inst).await?;
         }
         Commands::Project { command } => {
             let (_, inst) = cfg.get_instance(cli.instance.as_deref())?;

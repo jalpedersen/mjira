@@ -85,6 +85,8 @@ pub async fn handle(cmd: InstanceCommands, mut cfg: Config) -> Result<()> {
                     password,
                     pat: None,
                     api_version,
+                    repos: Vec::new(),
+                    component_repos: std::collections::HashMap::new(),
                 },
             );
             if cfg.default_instance.is_none() {

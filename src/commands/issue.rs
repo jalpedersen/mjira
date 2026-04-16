@@ -4,6 +4,7 @@ use colored::Colorize;
 use serde_json::{json, Value};
 
 use crate::client::JiraClient;
+use crate::config::Instance;
 use super::{display_name, field_name, print_field, short_date, truncate};
 use super::fields::{self, ResolvedCol, STATIC_COLS};
 
@@ -93,9 +94,17 @@ pub enum IssueCommands {
         #[arg(short, long)]
         project: Option<String>,
     },
+    /// List git commits mentioning an issue key across configured repositories
+    Commits {
+        /// Issue key (e.g. PROJ-123)
+        key: String,
+        /// Additional repository paths to search (supplements config repos)
+        #[arg(short, long = "repo")]
+        repos: Vec<String>,
+    },
 }
 
-pub async fn handle(cmd: IssueCommands, client: &JiraClient) -> Result<()> {
+pub async fn handle(cmd: IssueCommands, client: &JiraClient, instance: &Instance) -> Result<()> {
     match cmd {
         IssueCommands::List {
             project,
@@ -126,6 +135,10 @@ pub async fn handle(cmd: IssueCommands, client: &JiraClient) -> Result<()> {
         IssueCommands::Assign { key, assignee } => assign(client, &key, &assignee).await,
 
         IssueCommands::Values { field, project } => values(client, &field, project).await,
+
+        IssueCommands::Commits { key, repos } => {
+            commits(client, instance, &key, repos).await
+        }
     }
 }
 
@@ -524,6 +537,134 @@ async fn transition(client: &JiraClient, key: &str, target: Option<String>) -> R
             }
         }
     }
+    Ok(())
+}
+
+// ── Commits ──────────────────────────────────────────────────────────────────
+
+async fn commits(
+    client: &JiraClient,
+    instance: &Instance,
+    key: &str,
+    extra_repos: Vec<String>,
+) -> Result<()> {
+    // Fetch the issue's components to look up component-specific repos.
+    let issue: Value = client
+        .get(&format!("issue/{key}?fields=components,summary"))
+        .await?;
+    let f = &issue["fields"];
+
+    let component_names: Vec<&str> = f["components"]
+        .as_array()
+        .map(|arr| arr.iter().filter_map(|c| c["name"].as_str()).collect())
+        .unwrap_or_default();
+
+    // Resolve repos: prefer component mappings; fall back to instance.repos.
+    let mut repos: Vec<String> = {
+        let mapped: Vec<String> = component_names
+            .iter()
+            .filter_map(|name| instance.component_repos.get(*name).cloned())
+            .collect();
+
+        // Deduplicate while preserving order.
+        let mut seen = std::collections::HashSet::new();
+        let mut deduped: Vec<String> = Vec::new();
+        for r in mapped {
+            if seen.insert(r.clone()) {
+                deduped.push(r);
+            }
+        }
+
+        if deduped.is_empty() {
+            instance.repos.clone()
+        } else {
+            deduped
+        }
+    };
+
+    // Append any --repo overrides (deduplicated).
+    let mut seen: std::collections::HashSet<String> = repos.iter().cloned().collect();
+    for r in extra_repos {
+        if seen.insert(r.clone()) {
+            repos.push(r);
+        }
+    }
+
+    if repos.is_empty() {
+        println!("No repositories configured. Add repos or component_repos to the instance in config, or use --repo.");
+        return Ok(());
+    }
+
+    let summary = f["summary"].as_str().unwrap_or("");
+    println!();
+    println!("Commits mentioning {}", key.cyan().bold());
+    if !summary.is_empty() {
+        println!("{}", summary.dimmed());
+    }
+    if !component_names.is_empty() {
+        println!(
+            "Components: {}",
+            component_names.join(", ").bold()
+        );
+    }
+
+    for repo_path in &repos {
+        println!();
+        let display = std::path::Path::new(repo_path)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or(repo_path.as_str());
+        println!("{} {}", display.bold(), repo_path.dimmed());
+        println!("{}", "─".repeat(80));
+
+        let output = std::process::Command::new("git")
+            .args([
+                "-C",
+                repo_path,
+                "log",
+                "--all",
+                "--format=%h\t%as\t%an\t%s",
+                &format!("--grep={}", key),
+            ])
+            .output();
+
+        match output {
+            Err(e) => {
+                println!("  {} {}", "error:".red(), e);
+            }
+            Ok(out) if !out.status.success() => {
+                let msg = String::from_utf8_lossy(&out.stderr);
+                println!("  {} {}", "git error:".red(), msg.trim());
+            }
+            Ok(out) => {
+                let stdout = String::from_utf8_lossy(&out.stdout);
+                let lines: Vec<&str> = stdout.lines().collect();
+                if lines.is_empty() {
+                    println!("  {}", "(no commits found)".dimmed());
+                } else {
+                    for line in &lines {
+                        let parts: Vec<&str> = line.splitn(4, '\t').collect();
+                        match parts.as_slice() {
+                            [hash, date, author, subject] => {
+                                println!(
+                                    "  {}  {}  {}  {}",
+                                    hash.yellow(),
+                                    date.dimmed(),
+                                    author.bold(),
+                                    subject
+                                );
+                            }
+                            _ => println!("  {}", line),
+                        }
+                    }
+                    println!();
+                    println!("  {}", format!("{} commit(s)", lines.len()).dimmed());
+                }
+            }
+        }
+    }
+
+    println!();
     Ok(())
 }
 
