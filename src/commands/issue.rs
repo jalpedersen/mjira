@@ -309,7 +309,7 @@ fn cell_value(f: &Value, col: &ResolvedCol, w: usize) -> String {
 
 async fn get(client: &JiraClient, key: &str) -> Result<()> {
     let issue: Value = client
-        .get(&format!("issue/{key}?fields=summary,description,status,assignee,reporter,issuetype,priority,created,updated,project,comment,labels,fixVersions"))
+        .get(&format!("issue/{key}?fields=summary,description,status,assignee,reporter,issuetype,priority,created,updated,project,comment,labels,fixVersions&expand=changelog"))
         .await?;
 
     let f = &issue["fields"];
@@ -370,6 +370,42 @@ async fn get(client: &JiraClient, key: &str) -> Result<()> {
                 println!("{} — {}", author.bold(), created.dimmed());
                 println!("{}", body);
                 println!();
+            }
+        }
+    }
+
+    // Assignee history
+    let histories = issue["changelog"]["histories"].as_array();
+    if let Some(histories) = histories {
+        let assignee_events: Vec<(String, String, String)> = histories
+            .iter()
+            .flat_map(|h| {
+                let date = h["created"].as_str().unwrap_or("").to_string();
+                let actor = h["author"]["displayName"].as_str().unwrap_or("?").to_string();
+                h["items"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter(|item| item["field"].as_str() == Some("assignee"))
+                    .map(|item| {
+                        let to = item["toString"].as_str().unwrap_or("(unassigned)").to_string();
+                        (date.clone(), actor.clone(), to)
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+
+        if !assignee_events.is_empty() {
+            println!();
+            println!("{}", "Assignee History:".bold());
+            println!("{}", "─".repeat(80));
+            for (date, actor, to) in &assignee_events {
+                println!(
+                    "{}  {} assigned to {}",
+                    short_date(date).dimmed(),
+                    actor.bold(),
+                    to.cyan()
+                );
             }
         }
     }
