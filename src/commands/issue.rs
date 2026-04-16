@@ -309,15 +309,17 @@ fn cell_value(f: &Value, col: &ResolvedCol, w: usize) -> String {
 
 async fn get(client: &JiraClient, key: &str) -> Result<()> {
     let issue: Value = client
-        .get(&format!("issue/{key}?fields=summary,description,status,assignee,reporter,issuetype,priority,created,updated,project,comment,labels,fixVersions&expand=changelog"))
+        .get(&format!("issue/{key}?fields=summary,description,status,assignee,reporter,issuetype,priority,created,updated,project,comment,labels,fixVersions,attachment&expand=changelog"))
         .await?;
 
     let f = &issue["fields"];
+    let display_key = issue["key"].as_str().unwrap_or(key);
 
     println!();
-    println!("{} — {}", issue["key"].as_str().unwrap_or(key).cyan().bold(),
+    println!("{} — {}", display_key.cyan().bold(),
         f["summary"].as_str().unwrap_or("(no summary)").bold());
     println!("{}", "─".repeat(80));
+    print_field("URL", &client.browse_url(display_key));
 
     print_field("Type",     field_name(f, "issuetype"));
     print_field("Status",   field_name(f, "status"));
@@ -341,6 +343,19 @@ async fn get(client: &JiraClient, key: &str) -> Result<()> {
         let vs: Vec<&str> = fvs.iter().filter_map(|v| v["name"].as_str()).collect();
         if !vs.is_empty() {
             print_field("Fix Version", &vs.join(", "));
+        }
+    }
+
+    // Attachments
+    if let Some(attachments) = f["attachment"].as_array() {
+        if !attachments.is_empty() {
+            println!();
+            println!("{} ({})", "Attachments:".bold(), attachments.len().to_string().dimmed());
+            for a in attachments {
+                let filename = a["filename"].as_str().unwrap_or("?");
+                let url = a["content"].as_str().unwrap_or("");
+                println!("  {} — {}", filename.bold(), url.dimmed());
+            }
         }
     }
 

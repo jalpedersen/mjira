@@ -8,6 +8,7 @@ use crate::config::Instance;
 pub struct JiraClient {
     http: Client,
     api_base: String,
+    pub base_url: String,
     auth: String,
 }
 
@@ -19,8 +20,13 @@ impl JiraClient {
         Ok(Self {
             http,
             api_base: instance.api_base(),
+            base_url: instance.url.trim_end_matches('/').to_string(),
             auth: instance.auth_header()?,
         })
+    }
+
+    pub fn browse_url(&self, key: &str) -> String {
+        format!("{}/browse/{}", self.base_url, key)
     }
 
     fn url(&self, path: &str) -> String {
