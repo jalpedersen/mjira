@@ -679,12 +679,19 @@ async fn commits(
                         let parts: Vec<&str> = line.splitn(4, '\t').collect();
                         match parts.as_slice() {
                             [hash, date, author, subject] => {
+                                let branches = branches_containing(repo_path, hash);
+                                let branch_str = if branches.is_empty() {
+                                    String::new()
+                                } else {
+                                    format!("  [{}]", branches.join(", "))
+                                };
                                 println!(
-                                    "  {}  {}  {}  {}",
+                                    "  {}  {}  {}  {}{}",
                                     hash.yellow(),
                                     date.dimmed(),
                                     author.bold(),
-                                    subject
+                                    subject,
+                                    branch_str.magenta()
                                 );
                             }
                             _ => println!("  {}", line),
@@ -769,8 +776,14 @@ async fn diff(
 
         if let Some(hash) = commit {
             // Show diff for a single specific commit.
+            let branches = branches_containing(repo_path, hash);
+            let branch_str = if branches.is_empty() {
+                String::new()
+            } else {
+                format!("  [{}]", branches.join(", "))
+            };
             println!();
-            println!("{} {} — {}", display.bold(), repo_path.dimmed(), hash.yellow());
+            println!("{} {} — {}{}", display.bold(), repo_path.dimmed(), hash.yellow(), branch_str.magenta());
             println!("{}", "─".repeat(80));
             show_commit_diff(repo_path, hash);
         } else {
@@ -811,14 +824,21 @@ async fn diff(
                             let parts: Vec<&str> = line.splitn(4, '\t').collect();
                             match parts.as_slice() {
                                 [hash, date, author, subject] => {
+                                    let branches = branches_containing(repo_path, hash);
+                                    let branch_str = if branches.is_empty() {
+                                        String::new()
+                                    } else {
+                                        format!("  [{}]", branches.join(", "))
+                                    };
                                     println!();
                                     println!(
-                                        "{} {}  {}  {}  {}",
+                                        "{} {}  {}  {}  {}{}",
                                         display.bold(),
                                         repo_path.dimmed(),
                                         hash[..8.min(hash.len())].yellow(),
                                         date.dimmed(),
-                                        author.bold()
+                                        author.bold(),
+                                        branch_str.magenta()
                                     );
                                     println!("  {}", subject);
                                     println!("{}", "─".repeat(80));
@@ -835,6 +855,22 @@ async fn diff(
 
     println!();
     Ok(())
+}
+
+fn branches_containing(repo_path: &str, hash: &str) -> Vec<String> {
+    let out = std::process::Command::new("git")
+        .args(["-C", repo_path, "branch", "--all", "--contains", hash])
+        .output()
+        .ok();
+    out.filter(|o| o.status.success())
+        .map(|o| {
+            String::from_utf8_lossy(&o.stdout)
+                .lines()
+                .map(|l| l.trim_start_matches([' ', '*']).trim().to_string())
+                .filter(|l| !l.is_empty())
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 fn show_commit_diff(repo_path: &str, hash: &str) {
