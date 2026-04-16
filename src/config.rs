@@ -14,6 +14,8 @@ pub struct Instance {
     pub api_key: Option<String>,
     /// Password (Jira Server / Data Center)
     pub password: Option<String>,
+    /// Personal Access Token (Jira Server 8.14+ / Data Center) — bypasses 2FA; takes precedence over password
+    pub pat: Option<String>,
     /// REST API version to use (default: 2)
     #[serde(default = "default_api_version")]
     pub api_version: u8,
@@ -25,12 +27,15 @@ fn default_api_version() -> u8 {
 
 impl Instance {
     pub fn auth_header(&self) -> Result<String> {
+        if let Some(pat) = &self.pat {
+            return Ok(format!("Bearer {}", pat));
+        }
         let secret = if let Some(key) = &self.api_key {
             key.clone()
         } else if let Some(pass) = &self.password {
             pass.clone()
         } else {
-            bail!("Instance has neither api_key nor password configured");
+            bail!("Instance has neither api_key, password, nor pat configured");
         };
         let credentials = format!("{}:{}", self.username, secret);
         Ok(format!(

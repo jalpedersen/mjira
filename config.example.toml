@@ -19,6 +19,13 @@ username     = "john.doe"
 password     = "s3cr3t"
 api_version  = 2
 
+# ── Jira Server 8.14+ / Data Center (Personal Access Token — required for 2FA) ─
+[instances.server-pat]
+url          = "https://jira.internal.example.com"
+username     = "john.doe"            # not used for auth, but kept for reference
+pat          = "NjYyMD..."           # Profile → Personal Access Tokens
+api_version  = 2
+
 # ── Saved queries ─────────────────────────────────────────────────────────────
 # Run with: jira query <name>
 # List all: jira query

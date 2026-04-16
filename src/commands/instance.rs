@@ -83,6 +83,7 @@ pub async fn handle(cmd: InstanceCommands, mut cfg: Config) -> Result<()> {
                     username,
                     api_key,
                     password,
+                    pat: None,
                     api_version,
                 },
             );
