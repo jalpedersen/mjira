@@ -1,0 +1,209 @@
+# mjira
+
+A Rust CLI for interacting with Jira (Cloud and Server/Data Center) from the terminal.
+
+## Installation
+
+```bash
+just install   # builds release binary and copies to ~/bin/mjira
+```
+
+Or build manually:
+
+```bash
+cargo build --release
+cp target/release/mjira ~/bin/
+```
+
+## Configuration
+
+The config file location depends on your platform:
+
+| Platform | Path |
+|---|---|
+| macOS | `~/Library/Application Support/mjira/config.toml` |
+| Linux | `~/.config/mjira/config.toml` (or `$XDG_CONFIG_HOME/mjira/config.toml`) |
+| Windows | `%APPDATA%\mjira\config.toml` |
+
+Copy `config.example.toml` as a starting point.
+
+```bash
+mjira instance path   # print the config file location
+```
+
+### Adding an instance
+
+Interactive:
+
+```bash
+mjira instance add work
+```
+
+Or non-interactive:
+
+```bash
+# Jira Cloud (API token)
+mjira instance add cloud \
+  --url https://mycompany.atlassian.net \
+  --username user@mycompany.com \
+  --api-key ATATT3xFfGF0...
+
+# Jira Server (password)
+mjira instance add server \
+  --url https://jira.internal.example.com \
+  --username john.doe \
+  --password s3cr3t
+```
+
+For Jira Server 8.14+ / Data Center with 2FA, use a Personal Access Token — add `pat = "..."` directly in the config file.
+
+### Managing instances
+
+```bash
+mjira instance list               # list all configured instances
+mjira instance set-default cloud  # change the default
+mjira instance remove old         # remove an instance
+```
+
+### Selecting an instance at runtime
+
+```bash
+mjira --instance server issue list
+JIRA_INSTANCE=server mjira issue list   # via environment variable
+```
+
+## Issues
+
+### List issues
+
+By default shows issues assigned to the current user (or `default_assignee` in config).
+
+```bash
+mjira issue list
+mjira issue list --project PROJ
+mjira issue list --status "In Progress"
+mjira issue list --type Bug
+mjira issue list --assignee john.doe
+mjira issue list --any-assignee          # remove the assignee filter entirely
+mjira issue list --limit 50
+mjira issue list --jql "priority = High" # append extra JQL
+```
+
+Customize columns:
+
+```bash
+mjira issue list --columns key,type,status,priority,summary
+mjira issue list --list-columns   # show all available column names
+```
+
+### View an issue
+
+```bash
+mjira issue get PROJ-123
+```
+
+Displays summary, metadata, description, comments, and assignee history.
+
+### Create an issue
+
+```bash
+mjira issue create --project PROJ --summary "Fix login bug"
+mjira issue create --project PROJ --summary "Add dark mode" --type Story
+mjira issue create --project PROJ --summary "Urgent crash" --type Bug --priority High
+mjira issue create --project PROJ --summary "Task" --description "Details here" --assignee john.doe
+```
+
+### Transition an issue
+
+```bash
+mjira issue transition PROJ-123                  # list available transitions
+mjira issue transition PROJ-123 "In Progress"    # move to a status (case-insensitive)
+mjira issue transition PROJ-123 done
+```
+
+### Assign an issue
+
+```bash
+mjira issue assign PROJ-123 john.doe   # assign
+mjira issue assign PROJ-123 -          # unassign
+```
+
+### Comment on an issue
+
+```bash
+mjira issue comment PROJ-123 "Looks good to me."
+```
+
+### List valid field values
+
+```bash
+mjira issue values status
+mjira issue values priority
+mjira issue values "Fix Version/s" --project PROJ
+```
+
+## Git integration
+
+Find commits that mention an issue key across your configured repositories.
+
+```bash
+mjira issue commits PROJ-123
+mjira issue commits PROJ-123 --repo /path/to/extra/repo
+mjira issue commits PROJ-123 --verbose   # also show repos with no results
+```
+
+Show the full diff for those commits:
+
+```bash
+mjira issue diff PROJ-123
+mjira issue diff PROJ-123 --commit abc1234   # diff for a specific commit only
+```
+
+Repositories are resolved from the instance config. If the issue has components, `component_repos` mappings take priority over the `repos` fallback list. See `config.example.toml` for the format.
+
+## Search
+
+Run an ad-hoc JQL query:
+
+```bash
+mjira search 'project = PROJ AND status = "In Progress" ORDER BY updated DESC'
+mjira search 'assignee = currentUser()' --limit 50
+mjira search 'priority = High' --columns key,type,status,summary
+mjira search --list-columns   # show available column names
+```
+
+## Saved queries
+
+Define named queries in the config file (see path above):
+
+```toml
+[queries.my-work]
+jql = "assignee = currentUser() AND status != Done ORDER BY updated DESC"
+
+[queries.review]
+jql     = "status = \"In Review\" ORDER BY updated DESC"
+columns = "key,type,status,assignee,summary"
+limit   = 20
+```
+
+Run them:
+
+```bash
+mjira query             # list all saved queries
+mjira query my-work
+mjira query review --limit 10 --columns key,status,summary   # override config defaults
+```
+
+## Projects
+
+```bash
+mjira project list
+mjira project list --search platform
+```
+
+## Global flags
+
+| Flag | Description |
+|---|---|
+| `--instance <alias>` | Use a specific instance (or set `JIRA_INSTANCE`) |
+| `--verbose` | Print each HTTP request to stderr |
