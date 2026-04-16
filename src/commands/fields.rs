@@ -4,6 +4,7 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use crate::client::JiraClient;
+use super::as_jira_array;
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -268,8 +269,8 @@ async fn priority_values(client: &JiraClient) -> Result<Vec<FieldValue>> {
 }
 
 async fn project_values(client: &JiraClient) -> Result<Vec<FieldValue>> {
-    let resp: Value = client.get("project").await?;
-    let arr = resp.as_array().ok_or_else(|| anyhow::anyhow!("Unexpected /project response"))?;
+    let resp: Value = client.get(client.project_path()).await?;
+    let arr = as_jira_array(&resp).ok_or_else(|| anyhow::anyhow!("Unexpected /project response"))?;
     Ok(arr.iter().filter_map(|item| {
         let key = item["key"].as_str()?.to_string();
         let name = item["name"].as_str().map(|s| s.to_string());

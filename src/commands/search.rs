@@ -41,7 +41,7 @@ pub async fn run_search(
         ("maxResults", max.as_str()),
         ("fields", fields_str.as_str()),
     ];
-    let result: Value = client.get_with_params("search", &params).await?;
+    let result: Value = client.get_with_params(client.search_path(), &params).await?;
     let issues = result["issues"].as_array().map(|v| v.as_slice()).unwrap_or(&[]);
 
     if issues.is_empty() {

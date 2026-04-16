@@ -18,6 +18,10 @@ struct Cli {
     #[arg(short, long, global = true, env = "JIRA_INSTANCE")]
     instance: Option<String>,
 
+    /// Print each HTTP request to stderr
+    #[arg(short, long, global = true)]
+    verbose: bool,
+
     #[command(subcommand)]
     command: Commands,
 }
@@ -84,17 +88,17 @@ async fn main() -> Result<()> {
         }
         Commands::Issue { command } => {
             let (_, inst) = cfg.get_instance(cli.instance.as_deref())?;
-            let client = client::JiraClient::new(inst)?;
+            let client = client::JiraClient::new(inst, cli.verbose)?;
             issue::handle(command, &client, inst).await?;
         }
         Commands::Project { command } => {
             let (_, inst) = cfg.get_instance(cli.instance.as_deref())?;
-            let client = client::JiraClient::new(inst)?;
+            let client = client::JiraClient::new(inst, cli.verbose)?;
             project::handle(command, &client).await?;
         }
         Commands::Search { jql, limit, columns, list_columns } => {
             let (_, inst) = cfg.get_instance(cli.instance.as_deref())?;
-            let client = client::JiraClient::new(inst)?;
+            let client = client::JiraClient::new(inst, cli.verbose)?;
             if list_columns {
                 fields::print_columns(&client, fields::STATIC_COLS).await?;
             } else {
@@ -106,7 +110,7 @@ async fn main() -> Result<()> {
                 None => query::list(&cfg.queries),
                 Some(name) => {
                     let (_, inst) = cfg.get_instance(cli.instance.as_deref())?;
-                    let client = client::JiraClient::new(inst)?;
+                    let client = client::JiraClient::new(inst, cli.verbose)?;
                     if list_columns {
                         fields::print_columns(&client, fields::STATIC_COLS).await?;
                     } else {

@@ -42,3 +42,23 @@ pub fn truncate(s: &str, max_len: usize) -> String {
 pub fn short_date(dt: &str) -> &str {
     dt.get(..10).unwrap_or(dt)
 }
+
+/// Wrap plain text in an Atlassian Document Format (ADF) document node,
+/// required for rich-text fields (description, comment body) in API v3.
+pub fn to_adf_doc(text: &str) -> Value {
+    serde_json::json!({
+        "type": "doc",
+        "version": 1,
+        "content": [{
+            "type": "paragraph",
+            "content": [{"type": "text", "text": text}]
+        }]
+    })
+}
+
+/// Extract a JSON array from either a direct array (API v2) or a Jira Cloud v3
+/// paginated bean that wraps results in a `"values"` key.
+pub fn as_jira_array(v: &Value) -> Option<&Vec<Value>> {
+    v.as_array()
+        .or_else(|| v.get("values").and_then(|v| v.as_array()))
+}

@@ -10,10 +10,12 @@ pub struct JiraClient {
     api_base: String,
     pub base_url: String,
     auth: String,
+    verbose: bool,
+    api_version: u8,
 }
 
 impl JiraClient {
-    pub fn new(instance: &Instance) -> Result<Self> {
+    pub fn new(instance: &Instance, verbose: bool) -> Result<Self> {
         let http = Client::builder()
             .timeout(std::time::Duration::from_secs(30))
             .build()?;
@@ -22,7 +24,40 @@ impl JiraClient {
             api_base: instance.api_base(),
             base_url: instance.url.trim_end_matches('/').to_string(),
             auth: instance.auth_header()?,
+            verbose,
+            api_version: instance.api_version,
         })
+    }
+
+    fn log_request(&self, method: &str, url: &str, body: Option<&Value>) {
+        if self.verbose {
+            eprintln!("[verbose] {} {}", method, url);
+            if let Some(b) = body {
+                eprintln!("[verbose] body: {}", b);
+            }
+        }
+    }
+
+    pub fn search_path(&self) -> &'static str {
+        if self.api_version >= 3 {
+            "search/jql"
+        } else {
+            "search"
+        }
+    }
+
+    /// In API v3, `GET /project` is deprecated and returns nothing; the correct
+    /// endpoint is `GET /project/search` (paginated, `{"values": [...]}`).
+    pub fn project_path(&self) -> &'static str {
+        if self.api_version >= 3 {
+            "project/search"
+        } else {
+            "project"
+        }
+    }
+
+    pub fn api_version(&self) -> u8 {
+        self.api_version
     }
 
     pub fn browse_url(&self, key: &str) -> String {
@@ -34,9 +69,11 @@ impl JiraClient {
     }
 
     pub async fn get<T: DeserializeOwned>(&self, path: &str) -> Result<T> {
+        let url = self.url(path);
+        self.log_request("GET", &url, None);
         let resp = self
             .http
-            .get(self.url(path))
+            .get(url)
             .header("Authorization", &self.auth)
             .header("Accept", "application/json")
             .send()
@@ -49,9 +86,18 @@ impl JiraClient {
         path: &str,
         params: &[(&str, &str)],
     ) -> Result<T> {
+        let url = self.url(path);
+        if self.verbose {
+            let query = params
+                .iter()
+                .map(|(k, v)| format!("{}={}", k, v))
+                .collect::<Vec<_>>()
+                .join("&");
+            eprintln!("[verbose] GET {}?{}", url, query);
+        }
         let resp = self
             .http
-            .get(self.url(path))
+            .get(url)
             .header("Authorization", &self.auth)
             .header("Accept", "application/json")
             .query(params)
@@ -61,9 +107,11 @@ impl JiraClient {
     }
 
     pub async fn post<T: DeserializeOwned>(&self, path: &str, body: &Value) -> Result<T> {
+        let url = self.url(path);
+        self.log_request("POST", &url, Some(body));
         let resp = self
             .http
-            .post(self.url(path))
+            .post(url)
             .header("Authorization", &self.auth)
             .header("Content-Type", "application/json")
             .header("Accept", "application/json")
@@ -75,9 +123,11 @@ impl JiraClient {
 
     /// POST that expects no response body (e.g. transitions, comments that return 204)
     pub async fn post_no_body(&self, path: &str, body: &Value) -> Result<()> {
+        let url = self.url(path);
+        self.log_request("POST", &url, Some(body));
         let resp = self
             .http
-            .post(self.url(path))
+            .post(url)
             .header("Authorization", &self.auth)
             .header("Content-Type", "application/json")
             .header("Accept", "application/json")
@@ -93,9 +143,11 @@ impl JiraClient {
     }
 
     pub async fn put_no_body(&self, path: &str, body: &Value) -> Result<()> {
+        let url = self.url(path);
+        self.log_request("PUT", &url, Some(body));
         let resp = self
             .http
-            .put(self.url(path))
+            .put(url)
             .header("Authorization", &self.auth)
             .header("Content-Type", "application/json")
             .json(body)
@@ -111,12 +163,16 @@ impl JiraClient {
 
     async fn parse<T: DeserializeOwned>(&self, resp: Response) -> Result<T> {
         let status = resp.status();
+        let text = resp.text().await.unwrap_or_default();
         if !status.is_success() {
-            let text = resp.text().await.unwrap_or_default();
             bail!("{}", jira_error_message(status.as_u16(), &text));
         }
-        resp.json::<T>()
-            .await
+        if self.verbose {
+            // Pretty-print up to 2 KB of the response body so the shape is visible.
+            let preview: String = text.chars().take(2048).collect();
+            eprintln!("[verbose] response ({}): {}", status.as_u16(), preview);
+        }
+        serde_json::from_str(&text)
             .context("Failed to parse Jira response as JSON")
     }
 }
@@ -145,5 +201,9 @@ fn jira_error_message(status: u16, body: &str) -> String {
             return format!("Jira error ({}): {}", status, msg);
         }
     }
-    format!("Jira API error {}: {}", status, body.chars().take(200).collect::<String>())
+    format!(
+        "Jira API error {}: {}",
+        status,
+        body.chars().take(200).collect::<String>()
+    )
 }

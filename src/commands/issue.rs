@@ -4,7 +4,7 @@ use colored::Colorize;
 use serde_json::{json, Value};
 
 use super::fields::{self, ResolvedCol, STATIC_COLS};
-use super::{display_name, field_name, print_field, short_date, truncate};
+use super::{display_name, field_name, print_field, short_date, to_adf_doc, truncate};
 use crate::client::JiraClient;
 use crate::config::Instance;
 
@@ -282,7 +282,7 @@ async fn list(
         ("maxResults", max.as_str()),
         ("fields", fields_str.as_str()),
     ];
-    let result: Value = client.get_with_params("search", &params).await?;
+    let result: Value = client.get_with_params(client.search_path(), &params).await?;
     let issues = result["issues"]
         .as_array()
         .map(|v| v.as_slice())
@@ -506,7 +506,9 @@ async fn get(client: &JiraClient, key: &str) -> Result<()> {
     // Description
     println!();
     println!("{}", "Description:".bold());
-    match f["description"].as_str() {
+    let desc_text = f["description"].as_str().map(|s| s.to_string())
+        .or_else(|| adf_to_text(&f["description"]));
+    match desc_text.as_deref() {
         Some(desc) if !desc.is_empty() => println!("{}", desc),
         _ => println!("{}", "(no description)".dimmed()),
     }
@@ -525,7 +527,10 @@ async fn get(client: &JiraClient, key: &str) -> Result<()> {
             for c in comments {
                 let author = c["author"]["displayName"].as_str().unwrap_or("?");
                 let created = short_date(c["created"].as_str().unwrap_or(""));
-                let body = c["body"].as_str().unwrap_or("");
+                let body_owned = c["body"].as_str().map(|s| s.to_string())
+                    .or_else(|| adf_to_text(&c["body"]))
+                    .unwrap_or_default();
+                let body = body_owned.as_str();
                 println!("{} — {}", author.bold(), created.dimmed());
                 println!("{}", body);
                 println!();
@@ -596,14 +601,21 @@ async fn create(
     });
 
     if let Some(desc) = description {
-        fields["description"] = json!(desc);
+        fields["description"] = if client.api_version() >= 3 {
+            to_adf_doc(&desc)
+        } else {
+            json!(desc)
+        };
     }
     if let Some(prio) = priority {
         fields["priority"] = json!({ "name": prio });
     }
     if let Some(a) = assignee {
-        // Jira Cloud uses accountId; Jira Server uses name
-        fields["assignee"] = json!({ "name": a });
+        fields["assignee"] = if client.api_version() >= 3 {
+            json!({ "accountId": a })
+        } else {
+            json!({ "name": a })
+        };
     }
 
     let body = json!({ "fields": fields });
@@ -616,7 +628,11 @@ async fn create(
 // ── Comment ─────────────────────────────────────────────────────────────────
 
 async fn comment(client: &JiraClient, key: &str, body_text: &str) -> Result<()> {
-    let body = json!({ "body": body_text });
+    let body = if client.api_version() >= 3 {
+        json!({ "body": to_adf_doc(body_text) })
+    } else {
+        json!({ "body": body_text })
+    };
     let resp: Value = client.post(&format!("issue/{key}/comment"), &body).await?;
     let id = resp["id"].as_str().unwrap_or("?");
     println!("Comment {} added to {} ✓", id.dimmed(), key.green());
@@ -1002,6 +1018,63 @@ fn branches_containing(repo_path: &str, hash: &str) -> Vec<String> {
         .unwrap_or_default()
 }
 
+/// Best-effort plain-text extraction from Atlassian Document Format (ADF).
+/// ADF is the JSON-based rich text format used by Jira Cloud API v3.
+fn adf_to_text(node: &Value) -> Option<String> {
+    if node.is_null() {
+        return None;
+    }
+    let mut out = String::new();
+    collect_adf_text(node, &mut out);
+    if out.is_empty() { None } else { Some(out.trim_end().to_string()) }
+}
+
+fn collect_adf_text(node: &Value, out: &mut String) {
+    match node["type"].as_str() {
+        Some("text") => {
+            if let Some(t) = node["text"].as_str() {
+                out.push_str(t);
+            }
+        }
+        Some("hardBreak") => out.push('\n'),
+        Some("paragraph") | Some("heading") => {
+            if let Some(content) = node["content"].as_array() {
+                for child in content {
+                    collect_adf_text(child, out);
+                }
+            }
+            out.push('\n');
+        }
+        Some("bulletList") | Some("orderedList") => {
+            if let Some(items) = node["content"].as_array() {
+                for item in items {
+                    out.push_str("  - ");
+                    if let Some(content) = item["content"].as_array() {
+                        for child in content {
+                            collect_adf_text(child, out);
+                        }
+                    }
+                }
+            }
+        }
+        Some("codeBlock") => {
+            if let Some(content) = node["content"].as_array() {
+                for child in content {
+                    collect_adf_text(child, out);
+                }
+            }
+            out.push('\n');
+        }
+        _ => {
+            if let Some(content) = node["content"].as_array() {
+                for child in content {
+                    collect_adf_text(child, out);
+                }
+            }
+        }
+    }
+}
+
 fn show_commit_diff(repo_path: &str, hash: &str) {
     let output = std::process::Command::new("git")
         .args(["-C", repo_path, "show", "--stat", "--patch", hash])
@@ -1033,10 +1106,10 @@ fn show_commit_diff(repo_path: &str, hash: &str) {
 // ── Assign ───────────────────────────────────────────────────────────────────
 
 async fn assign(client: &JiraClient, key: &str, assignee: &str) -> Result<()> {
-    let body = if assignee == "-" {
-        json!({ "name": null })
+    let body = if client.api_version() >= 3 {
+        if assignee == "-" { json!({ "accountId": null }) } else { json!({ "accountId": assignee }) }
     } else {
-        json!({ "name": assignee })
+        if assignee == "-" { json!({ "name": null }) } else { json!({ "name": assignee }) }
     };
     client
         .put_no_body(&format!("issue/{key}/assignee"), &body)

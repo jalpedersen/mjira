@@ -4,7 +4,7 @@ use colored::Colorize;
 use serde_json::Value;
 
 use crate::client::JiraClient;
-use super::truncate;
+use super::{as_jira_array, truncate};
 
 #[derive(Subcommand)]
 pub enum ProjectCommands {
@@ -23,8 +23,8 @@ pub async fn handle(cmd: ProjectCommands, client: &JiraClient) -> Result<()> {
 }
 
 async fn list(client: &JiraClient, query: Option<String>) -> Result<()> {
-    let projects: Value = client.get("project").await?;
-    let projects = match projects.as_array() {
+    let projects: Value = client.get(client.project_path()).await?;
+    let projects = match as_jira_array(&projects) {
         Some(p) => p,
         None => {
             println!("No projects returned.");
