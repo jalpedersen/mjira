@@ -55,6 +55,9 @@ pub enum IssueCommands {
     Get {
         /// Issue key (e.g. PROJ-123)
         key: String,
+        /// Display image attachments using kitty icat
+        #[arg(long)]
+        images: bool,
     },
     /// Create a new issue
     Create {
@@ -162,7 +165,7 @@ pub async fn handle(cmd: IssueCommands, client: &JiraClient, instance: &Instance
             .await
         }
 
-        IssueCommands::Get { key } => get(client, &key).await,
+        IssueCommands::Get { key, images } => get(client, &key, images).await,
 
         IssueCommands::Create {
             project,
@@ -446,7 +449,7 @@ fn cell_value(f: &Value, col: &ResolvedCol, w: usize) -> String {
 
 // ── Get ─────────────────────────────────────────────────────────────────────
 
-async fn get(client: &JiraClient, key: &str) -> Result<()> {
+async fn get(client: &JiraClient, key: &str, show_images: bool) -> Result<()> {
     let issue: Value = client
         .get(&format!("issue/{key}?fields=summary,description,status,assignee,reporter,issuetype,priority,created,updated,project,comment,labels,fixVersions,attachment&expand=changelog"))
         .await?;
@@ -501,6 +504,9 @@ async fn get(client: &JiraClient, key: &str) -> Result<()> {
                 let filename = a["filename"].as_str().unwrap_or("?");
                 let url = a["content"].as_str().unwrap_or("");
                 println!("  {} — {}", filename.bold(), url.dimmed());
+            }
+            if show_images {
+                show_image_attachments(client, attachments).await?;
             }
         }
     }
@@ -1022,6 +1028,73 @@ fn branches_containing(repo_path: &str, hash: &str) -> Vec<String> {
                 .collect()
         })
         .unwrap_or_default()
+}
+
+async fn show_image_attachments(client: &JiraClient, attachments: &[Value]) -> Result<()> {
+    let images: Vec<&Value> = attachments
+        .iter()
+        .filter(|a| {
+            a["mimeType"]
+                .as_str()
+                .map(|m| m.starts_with("image/"))
+                .unwrap_or(false)
+        })
+        .collect();
+
+    if images.is_empty() {
+        return Ok(());
+    }
+
+    println!();
+    println!("{}", "Images:".bold());
+
+    for img in images {
+        let filename = img["filename"].as_str().unwrap_or("?");
+        let url = img["content"].as_str().unwrap_or("");
+        if url.is_empty() {
+            continue;
+        }
+
+        println!("  {}", filename.bold());
+
+        let bytes = match client.get_bytes_url(url).await {
+            Ok(b) => b,
+            Err(e) => {
+                println!("  {}", format!("download failed: {e}").red());
+                continue;
+            }
+        };
+
+        let ext = std::path::Path::new(filename)
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("bin");
+        let tmp = std::env::temp_dir().join(format!(
+            "mjira_img_{}.{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis(),
+            ext
+        ));
+
+        if let Err(e) = std::fs::write(&tmp, &bytes) {
+            println!("  {}", format!("write failed: {e}").red());
+            continue;
+        }
+
+        let status = std::process::Command::new("kitty")
+            .args(["+kitten", "icat", "--scale-up", tmp.to_str().unwrap_or("")])
+            .status();
+
+        let _ = std::fs::remove_file(&tmp);
+
+        if let Err(e) = status {
+            println!("  {}", format!("kitty icat not available: {e}").red());
+        }
+    }
+
+    Ok(())
 }
 
 /// Best-effort plain-text extraction from Atlassian Document Format (ADF).

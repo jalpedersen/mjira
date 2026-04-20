@@ -100,9 +100,10 @@ mjira issue list --list-columns   # show all available column names
 
 ```bash
 mjira issue get PROJ-123
+mjira issue get PROJ-123 --images   # also render image attachments via kitty icat
 ```
 
-Displays summary, metadata, description, comments, and assignee history.
+Displays summary, metadata, description, comments, and assignee history. The `--images` flag downloads image attachments and renders them inline using [kitty's icat kitten](https://sw.kovidgoyal.net/kitty/kittens/icat/).
 
 ### Create an issue
 

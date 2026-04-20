@@ -161,6 +161,21 @@ impl JiraClient {
         Ok(())
     }
 
+    pub async fn get_bytes_url(&self, url: &str) -> Result<Vec<u8>> {
+        self.log_request("GET", url, None);
+        let resp = self
+            .http
+            .get(url)
+            .header("Authorization", &self.auth)
+            .send()
+            .await?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            bail!("Failed to download: HTTP {}", status);
+        }
+        Ok(resp.bytes().await?.to_vec())
+    }
+
     async fn parse<T: DeserializeOwned>(&self, resp: Response) -> Result<T> {
         let status = resp.status();
         let text = resp.text().await.unwrap_or_default();
