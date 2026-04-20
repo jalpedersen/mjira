@@ -93,6 +93,12 @@ pub enum IssueCommands {
         key: String,
         /// Target status name (e.g. "In Progress"). Omit to list available transitions.
         status: Option<String>,
+        /// Unassign the issue after transitioning
+        #[arg(long)]
+        unassign: bool,
+        /// Also transition the parent issue to the same status
+        #[arg(long)]
+        transition_parent: bool,
     },
     /// Assign an issue to a user
     Assign {
@@ -189,7 +195,12 @@ pub async fn handle(cmd: IssueCommands, client: &JiraClient, instance: &Instance
 
         IssueCommands::Comment { key, body } => comment(client, &key, &body).await,
 
-        IssueCommands::Transition { key, status } => transition(client, &key, status).await,
+        IssueCommands::Transition {
+            key,
+            status,
+            unassign,
+            transition_parent,
+        } => transition(client, &key, status, unassign, transition_parent).await,
 
         IssueCommands::Assign { key, assignee } => assign(client, &key, &assignee).await,
 
@@ -653,13 +664,28 @@ async fn comment(client: &JiraClient, key: &str, body_text: &str) -> Result<()> 
 
 // ── Transition ───────────────────────────────────────────────────────────────
 
-async fn transition(client: &JiraClient, key: &str, target: Option<String>) -> Result<()> {
+fn transition<'a>(
+    client: &'a JiraClient,
+    key: &'a str,
+    target: Option<String>,
+    unassign: bool,
+    with_parent: bool,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<()>> + 'a>> {
+    Box::pin(transition_inner(client, key, target, unassign, with_parent))
+}
+
+async fn transition_inner(
+    client: &JiraClient,
+    key: &str,
+    target: Option<String>,
+    unassign: bool,
+    with_parent: bool,
+) -> Result<()> {
     let resp: Value = client.get(&format!("issue/{key}/transitions")).await?;
     let transitions = resp["transitions"].as_array().cloned().unwrap_or_default();
 
     match target {
         None => {
-            // List available transitions
             println!("Available transitions for {}:", key.cyan());
             for t in &transitions {
                 let id = t["id"].as_str().unwrap_or("?");
@@ -668,7 +694,6 @@ async fn transition(client: &JiraClient, key: &str, target: Option<String>) -> R
             }
         }
         Some(status_name) => {
-            // Find matching transition (case-insensitive)
             let t = transitions.iter().find(|t| {
                 t["name"]
                     .as_str()
@@ -698,6 +723,24 @@ async fn transition(client: &JiraClient, key: &str, target: Option<String>) -> R
                         key.green(),
                         t["name"].as_str().unwrap_or(&status_name).bold()
                     );
+                    if unassign {
+                        assign(client, key, "-").await?;
+                    }
+                    if with_parent {
+                        let issue: Value = client
+                            .get(&format!("issue/{key}?fields=parent"))
+                            .await?;
+                        match issue["fields"]["parent"]["key"].as_str() {
+                            None => {
+                                println!("{}", "No parent issue found.".dimmed());
+                            }
+                            Some(parent_key) => {
+                                let parent_key = parent_key.to_string();
+                                transition(client, &parent_key, Some(status_name), false, false)
+                                    .await?;
+                            }
+                        }
+                    }
                 }
             }
         }
