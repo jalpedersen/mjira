@@ -202,6 +202,41 @@ mjira project list
 mjira project list --search platform
 ```
 
+## Boards
+
+Requires the Agile/Software plugin (standard on Jira Cloud, optional on Server/Data Center).
+
+### List boards
+
+```bash
+mjira board list                        # all accessible boards (auto-paginated)
+mjira board list --project PROJ         # filter by project key or ID
+mjira board list --name "My Team"       # filter by board name (substring)
+mjira board list --limit 20             # return at most 20 boards
+```
+
+### List issues on a board
+
+```bash
+mjira board issues 42
+mjira board issues 42 --limit 50
+mjira board issues 42 --jql 'status = "In Progress"'
+mjira board issues 42 --columns key,type,status,priority,summary
+mjira board issues 42 --quick-filter 10          # apply a quick filter by ID
+mjira board issues 42 --quick-filter 10 --jql 'priority = High'  # combine with extra JQL
+```
+
+### Quick filters
+
+```bash
+mjira board quick-filters 42   # list all quick filters for board 42 (auto-paginated)
+```
+
+Each quick filter has an ID, name, and its underlying JQL clause. Use the ID with `board issues --quick-filter`.
+
+Older Jira Server instances that do not expose the quick-filter endpoint on the Agile REST API are handled automatically via a fallback to the legacy GreenHopper API.
+
+
 ## Global flags
 
 | Flag | Description |

@@ -11,11 +11,12 @@ pub struct JiraClient {
     pub base_url: String,
     auth: String,
     verbose: bool,
+    very_verbose: bool,
     api_version: u8,
 }
 
 impl JiraClient {
-    pub fn new(instance: &Instance, verbose: bool) -> Result<Self> {
+    pub fn new(instance: &Instance, verbose: bool, very_verbose: bool) -> Result<Self> {
         let http = Client::builder()
             .timeout(std::time::Duration::from_secs(30))
             .build()?;
@@ -25,6 +26,7 @@ impl JiraClient {
             base_url: instance.url.trim_end_matches('/').to_string(),
             auth: instance.auth_header()?,
             verbose,
+            very_verbose,
             api_version: instance.api_version,
         })
     }
@@ -62,6 +64,64 @@ impl JiraClient {
 
     pub fn browse_url(&self, key: &str) -> String {
         format!("{}/browse/{}", self.base_url, key)
+    }
+
+    pub fn agile_url(&self, path: &str) -> String {
+        format!(
+            "{}/rest/agile/1.0/{}",
+            self.base_url,
+            path.trim_start_matches('/')
+        )
+    }
+
+    pub async fn greenhopper_get<T: DeserializeOwned>(
+        &self,
+        path: &str,
+        params: &[(&str, &str)],
+    ) -> Result<T> {
+        let url = format!(
+            "{}/rest/greenhopper/1.0/{}",
+            self.base_url,
+            path.trim_start_matches('/')
+        );
+        if self.verbose {
+            let query = params.iter().map(|(k, v)| format!("{}={}", k, v)).collect::<Vec<_>>().join("&");
+            eprintln!("[verbose] GET {}?{}", url, query);
+        }
+        let resp = self
+            .http
+            .get(url)
+            .header("Authorization", &self.auth)
+            .header("Accept", "application/json")
+            .query(params)
+            .send()
+            .await?;
+        self.parse(resp).await
+    }
+
+    pub async fn agile_get_with_params<T: DeserializeOwned>(
+        &self,
+        path: &str,
+        params: &[(&str, &str)],
+    ) -> Result<T> {
+        let url = self.agile_url(path);
+        if self.verbose {
+            let query = params
+                .iter()
+                .map(|(k, v)| format!("{}={}", k, v))
+                .collect::<Vec<_>>()
+                .join("&");
+            eprintln!("[verbose] GET {}?{}", url, query);
+        }
+        let resp = self
+            .http
+            .get(url)
+            .header("Authorization", &self.auth)
+            .header("Accept", "application/json")
+            .query(params)
+            .send()
+            .await?;
+        self.parse(resp).await
     }
 
     fn url(&self, path: &str) -> String {
@@ -183,9 +243,12 @@ impl JiraClient {
             bail!("{}", jira_error_message(status.as_u16(), &text));
         }
         if self.verbose {
-            // Pretty-print up to 2 KB of the response body so the shape is visible.
-            let preview: String = text.chars().take(2048).collect();
-            eprintln!("[verbose] response ({}): {}", status.as_u16(), preview);
+            if self.very_verbose {
+                eprintln!("[verbose] response ({}): {}", status.as_u16(), text);
+            } else {
+                let preview: String = text.chars().take(2048).collect();
+                eprintln!("[verbose] response ({}): {}", status.as_u16(), preview);
+            }
         }
         serde_json::from_str(&text)
             .context("Failed to parse Jira response as JSON")

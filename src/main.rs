@@ -5,7 +5,7 @@ mod client;
 mod commands;
 mod config;
 
-use commands::{fields, instance, issue, project, query, search};
+use commands::{board, fields, instance, issue, project, query, search};
 
 #[derive(Parser)]
 #[command(
@@ -21,6 +21,10 @@ struct Cli {
     /// Print each HTTP request to stderr
     #[arg(short, long, global = true)]
     verbose: bool,
+
+    /// Print full request + response bodies to stderr (implies -v)
+    #[arg(short = 'V', long, global = true)]
+    very_verbose: bool,
 
     #[command(subcommand)]
     command: Commands,
@@ -45,6 +49,12 @@ enum Commands {
     Project {
         #[command(subcommand)]
         command: project::ProjectCommands,
+    },
+    /// Work with Jira boards (requires Agile/Software plugin)
+    #[command(subcommand_required = true)]
+    Board {
+        #[command(subcommand)]
+        command: board::BoardCommands,
     },
     /// Search issues using JQL
     Search {
@@ -88,17 +98,22 @@ async fn main() -> Result<()> {
         }
         Commands::Issue { command } => {
             let (_, inst) = cfg.get_instance(cli.instance.as_deref())?;
-            let client = client::JiraClient::new(inst, cli.verbose)?;
+            let client = client::JiraClient::new(inst, cli.verbose || cli.very_verbose, cli.very_verbose)?;
             issue::handle(command, &client, inst).await?;
         }
         Commands::Project { command } => {
             let (_, inst) = cfg.get_instance(cli.instance.as_deref())?;
-            let client = client::JiraClient::new(inst, cli.verbose)?;
+            let client = client::JiraClient::new(inst, cli.verbose || cli.very_verbose, cli.very_verbose)?;
             project::handle(command, &client).await?;
+        }
+        Commands::Board { command } => {
+            let (_, inst) = cfg.get_instance(cli.instance.as_deref())?;
+            let client = client::JiraClient::new(inst, cli.verbose || cli.very_verbose, cli.very_verbose)?;
+            board::handle(command, &client).await?;
         }
         Commands::Search { jql, limit, columns, list_columns } => {
             let (_, inst) = cfg.get_instance(cli.instance.as_deref())?;
-            let client = client::JiraClient::new(inst, cli.verbose)?;
+            let client = client::JiraClient::new(inst, cli.verbose || cli.very_verbose, cli.very_verbose)?;
             if list_columns {
                 fields::print_columns(&client, fields::STATIC_COLS).await?;
             } else {
@@ -110,7 +125,7 @@ async fn main() -> Result<()> {
                 None => query::list(&cfg.queries),
                 Some(name) => {
                     let (_, inst) = cfg.get_instance(cli.instance.as_deref())?;
-                    let client = client::JiraClient::new(inst, cli.verbose)?;
+                    let client = client::JiraClient::new(inst, cli.verbose || cli.very_verbose, cli.very_verbose)?;
                     if list_columns {
                         fields::print_columns(&client, fields::STATIC_COLS).await?;
                     } else {
