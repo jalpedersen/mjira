@@ -344,6 +344,51 @@ Date        Issue    Time    Description
 Total: 6h 30m
 ```
 
+## ServiceNow
+
+A separate `snow` binary provides time-tracking commands via the ServiceNow Table API.
+
+### Installation
+
+`just install` builds and copies all binaries including `snow` → `~/bin/msnow`.
+
+### Configuration
+
+Config file location:
+
+| Platform | Path |
+|---|---|
+| macOS | `~/Library/Application Support/makrel/snow.toml` |
+| Linux | `~/.config/makrel/snow.toml` |
+
+```toml
+default_instance = "work"
+
+[instances.work]
+url      = "https://mycompany.service-now.com"
+username = "john.doe"
+password = "s3cr3t"
+# api_key = "bearer-token"   # alternative to password
+# cookie        = "JSESSIONID=abc123; glide_session_store=xyz789"  # SSO instances
+# x_user_token  = "abc123"             # CSRF token, if required (run `g_ck` in browser console)
+# time_table    = "task_time_worked"   # override if your instance uses a different table
+```
+
+For SSO-protected instances, log in via the browser, open DevTools → Application → Cookies, and copy the session cookies into the `cookie` field. If you still get 401s, also grab the CSRF token by running `g_ck` in the browser console and set `x_user_token`.
+
+### Commands
+
+#### List time registrations
+
+```bash
+msnow log                            # current week (Monday → today)
+msnow log --from 2024-01-01 --to 2024-01-31
+msnow log --from 2024-01-01          # from date until today
+msnow --instance work log
+```
+
+Reads from the `task_time_worked` table, filtered by `sys_created_by` and `work_date`.
+
 ## Global flags
 
 | Flag | Description |

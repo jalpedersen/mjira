@@ -11,6 +11,10 @@ path = "src/main.rs"
 name = "tempo"
 path = "src/tempo_main.rs"
 
+[[bin]]
+name = "snow"
+path = "src/snow_main.rs"
+
 [dependencies]
 anyhow     = "1"
 base64     = "0.22"
