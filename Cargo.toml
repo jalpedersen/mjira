@@ -7,9 +7,14 @@ edition = "2021"
 name = "jira"
 path = "src/main.rs"
 
+[[bin]]
+name = "tempo"
+path = "src/tempo_main.rs"
+
 [dependencies]
 anyhow     = "1"
 base64     = "0.22"
+chrono     = "0.4"
 clap           = { version = "4", features = ["derive", "env"] }
 clap_complete  = "4"
 colored    = "2"

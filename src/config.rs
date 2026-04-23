@@ -29,6 +29,8 @@ pub struct Instance {
     /// When an issue has components, the mapped repos are used instead of `repos`.
     #[serde(default)]
     pub component_repos: HashMap<String, String>,
+    /// Tempo API token for Jira Cloud (generate at https://app.tempo.io/settings#apiToken)
+    pub tempo_token: Option<String>,
 }
 
 fn default_api_version() -> u8 {

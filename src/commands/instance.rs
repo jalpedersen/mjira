@@ -88,6 +88,7 @@ pub async fn handle(cmd: InstanceCommands, mut cfg: Config) -> Result<()> {
                     default_assignee: None,
                     repos: Vec::new(),
                     component_repos: std::collections::HashMap::new(),
+                    tempo_token: None,
                 },
             );
             if cfg.default_instance.is_none() {

@@ -277,6 +277,64 @@ Each quick filter has an ID, name, and its underlying JQL clause. Use the ID wit
 Older Jira Server instances that do not expose the quick-filter endpoint on the Agile REST API are handled automatically via a fallback to the legacy GreenHopper API.
 
 
+## Tempo
+
+A separate `tempo` binary provides time-tracking commands via the [Tempo](https://www.tempo.io/) plugin.
+
+### Installation
+
+```bash
+just install-tempo   # builds and copies tempo to ~/bin/mtempo
+```
+
+### Configuration
+
+Add `tempo_token` to your instance in the config file:
+
+**Jira Cloud** — generate a Tempo API token in your Tempo settings:
+
+```toml
+[instances.work]
+url          = "https://mycompany.atlassian.net"
+username     = "user@mycompany.com"
+api_key      = "ATATT3x..."
+api_version  = 3
+tempo_token  = "your-tempo-api-token"
+```
+
+**Jira Data Center / Server** — uses your existing Jira credentials (PAT or Basic auth); no extra token needed:
+
+```toml
+[instances.dc]
+url         = "https://jira.internal.example.com"
+username    = "john.doe"
+pat         = "your-jira-pat"
+```
+
+### Commands
+
+#### List time registrations
+
+```bash
+tempo log                            # current week (Monday → today)
+tempo log --from 2024-01-01 --to 2024-01-31
+tempo log --from 2024-01-01          # from date until today
+tempo log --limit 200                # return up to 200 entries (default 1000)
+tempo --instance dc log              # use a specific instance
+```
+
+Output:
+
+```
+Date        Issue    Time    Description
+────────────────────────────────────────────────────────
+2024-01-15  ABC-123  2h 30m  Working on feature X
+2024-01-15  ABC-456  1h      Code review
+2024-01-16  ABC-123  3h      More work
+────────────────────────────────────────────────────────
+Total: 6h 30m
+```
+
 ## Global flags
 
 | Flag | Description |

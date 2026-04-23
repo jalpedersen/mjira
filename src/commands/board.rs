@@ -61,8 +61,7 @@ async fn list(client: &JiraClient, project: Option<String>, name_filter: Option<
     let page_size: u32 = limit.unwrap_or(50).min(50);
     let mut all_boards: Vec<Value> = Vec::new();
     let mut start_at: u32 = 0;
-    let mut total_reported: u64 = 0;
-
+    let mut total_reported: Option<u64> = None;
     loop {
         let start_str = start_at.to_string();
         let size_str = page_size.to_string();
@@ -80,11 +79,12 @@ async fn list(client: &JiraClient, project: Option<String>, name_filter: Option<
         let params_ref: Vec<(&str, &str)> = params.iter().map(|(k, v)| (*k, v.as_str())).collect();
         let result: Value = client.agile_get_with_params("board", &params_ref).await?;
 
-        total_reported = result["total"].as_u64().unwrap_or(all_boards.len() as u64);
+        let total = result["total"].as_u64().unwrap_or(0);
         let page = match result["values"].as_array() {
             Some(v) if !v.is_empty() => v.clone(),
             _ => break,
         };
+        total_reported = Some(total);
         let fetched = page.len() as u32;
         all_boards.extend(page);
 
@@ -96,7 +96,7 @@ async fn list(client: &JiraClient, project: Option<String>, name_filter: Option<
         }
 
         start_at += fetched;
-        if fetched < page_size || all_boards.len() as u64 >= total_reported {
+        if fetched < page_size || all_boards.len() as u64 >= total {
             break;
         }
     }
@@ -106,6 +106,7 @@ async fn list(client: &JiraClient, project: Option<String>, name_filter: Option<
         return Ok(());
     }
 
+    let total_reported = total_reported.unwrap_or(all_boards.len() as u64);
     println!("{}", format!("Showing {} of {} boards", all_boards.len(), total_reported).dimmed());
     println!();
     println!(
