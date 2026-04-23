@@ -33,7 +33,14 @@ eval "$(mjira completions bash)"
 mjira completions fish | source
 ```
 
-The zsh completion includes dynamic issue key completion with summaries shown alongside each candidate. Results are fetched from Jira and cached for 5 minutes at `~/.cache/makrel/<instance>/issues`.
+The zsh completion includes dynamic issue key completion with summaries shown alongside each candidate. Results are fetched from Jira (issues updated in the last 90 days, up to 200) and cached for 5 minutes.
+
+Cache location:
+
+| Platform | Path |
+|---|---|
+| macOS | `~/Library/Caches/makrel/<instance>/issues` |
+| Linux | `~/.cache/makrel/<instance>/issues` (or `$XDG_CACHE_HOME/makrel/<instance>/issues`) |
 
 ## Configuration
 
