@@ -93,6 +93,9 @@ pub enum IssueCommands {
         key: String,
         /// Target status name (e.g. "In Progress"). Omit to list available transitions.
         status: Option<String>,
+        /// Assign the issue after transitioning. Omit value to use the configured default assignee.
+        #[arg(long, num_args = 0..=1, value_name = "USER")]
+        assign: Option<Option<String>>,
         /// Unassign the issue after transitioning
         #[arg(long)]
         unassign: bool,
@@ -198,9 +201,10 @@ pub async fn handle(cmd: IssueCommands, client: &JiraClient, instance: &Instance
         IssueCommands::Transition {
             key,
             status,
+            assign,
             unassign,
             transition_parent,
-        } => transition(client, &key, status, unassign, transition_parent).await,
+        } => transition(client, instance, &key, status, assign, unassign, transition_parent).await,
 
         IssueCommands::Assign { key, assignee } => assign(client, &key, &assignee).await,
 
@@ -666,18 +670,30 @@ async fn comment(client: &JiraClient, key: &str, body_text: &str) -> Result<()> 
 
 fn transition<'a>(
     client: &'a JiraClient,
+    instance: &'a Instance,
     key: &'a str,
     target: Option<String>,
+    assign_after: Option<Option<String>>,
     unassign: bool,
     with_parent: bool,
 ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<()>> + 'a>> {
-    Box::pin(transition_inner(client, key, target, unassign, with_parent))
+    Box::pin(transition_inner(
+        client,
+        instance,
+        key,
+        target,
+        assign_after,
+        unassign,
+        with_parent,
+    ))
 }
 
 async fn transition_inner(
     client: &JiraClient,
+    instance: &Instance,
     key: &str,
     target: Option<String>,
+    assign_after: Option<Option<String>>,
     unassign: bool,
     with_parent: bool,
 ) -> Result<()> {
@@ -723,6 +739,13 @@ async fn transition_inner(
                         key.green(),
                         t["name"].as_str().unwrap_or(&status_name).bold()
                     );
+                    if let Some(ref user_opt) = assign_after {
+                        let user = user_opt.clone().or_else(|| instance.default_assignee.clone());
+                        match user {
+                            Some(u) => assign(client, key, &u).await?,
+                            None => println!("{}", "No default assignee configured.".dimmed()),
+                        }
+                    }
                     if unassign {
                         assign(client, key, "-").await?;
                     }
@@ -736,8 +759,16 @@ async fn transition_inner(
                             }
                             Some(parent_key) => {
                                 let parent_key = parent_key.to_string();
-                                transition(client, &parent_key, Some(status_name), false, false)
-                                    .await?;
+                                transition(
+                                    client,
+                                    instance,
+                                    &parent_key,
+                                    Some(status_name),
+                                    assign_after,
+                                    unassign,
+                                    false,
+                                )
+                                .await?;
                             }
                         }
                     }

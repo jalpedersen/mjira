@@ -120,6 +120,9 @@ mjira issue create --project PROJ --summary "Task" --description "Details here" 
 mjira issue transition PROJ-123                  # list available transitions
 mjira issue transition PROJ-123 "In Progress"    # move to a status (case-insensitive)
 mjira issue transition PROJ-123 done
+mjira issue transition PROJ-123 done --assign          # assign to default_assignee after transition
+mjira issue transition PROJ-123 done --assign john.doe # assign to a specific user after transition
+mjira issue transition PROJ-123 done --unassign        # unassign after transition
 ```
 
 ### Assign an issue
