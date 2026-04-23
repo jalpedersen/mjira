@@ -1,4 +1,5 @@
 pub mod board;
+pub mod complete;
 pub mod fields;
 pub mod instance;
 pub mod issue;

@@ -3,9 +3,10 @@ use clap::{CommandFactory, Parser, Subcommand};
 
 mod client;
 mod commands;
+mod completions;
 mod config;
 
-use commands::{board, fields, instance, issue, project, query, search};
+use commands::{board, complete, fields, instance, issue, project, query, search};
 
 #[derive(Parser)]
 #[command(
@@ -23,7 +24,7 @@ struct Cli {
     verbose: bool,
 
     /// Print full request + response bodies to stderr (implies -v)
-    #[arg(short = 'V', long, global = true)]
+    #[arg(long, global = true)]
     very_verbose: bool,
 
     #[command(subcommand)]
@@ -91,6 +92,12 @@ enum Commands {
         /// Shell to generate completions for
         shell: clap_complete::Shell,
     },
+    /// Output cached issue keys for shell completion
+    #[command(hide = true, name = "_complete-issues")]
+    CompleteIssues,
+    /// Output instance names for shell completion
+    #[command(hide = true, name = "_complete-instances")]
+    CompleteInstances,
 }
 
 #[tokio::main]
@@ -98,7 +105,35 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
 
     if let Commands::Completions { shell } = cli.command {
-        clap_complete::generate(shell, &mut Cli::command(), "mjira", &mut std::io::stdout());
+        if shell == clap_complete::Shell::Zsh {
+            print!("{}", completions::ZSH);
+        } else {
+            clap_complete::generate(shell, &mut Cli::command(), "mjira", &mut std::io::stdout());
+        }
+        return Ok(());
+    }
+
+    if matches!(cli.command, Commands::CompleteIssues | Commands::CompleteInstances) {
+        match config::Config::load() {
+            Err(e) => eprintln!("complete: config error: {e}"),
+            Ok(cfg) => match cli.command {
+                Commands::CompleteIssues => {
+                    match cfg.get_instance(cli.instance.as_deref()) {
+                        Err(e) => eprintln!("complete: instance error: {e}"),
+                        Ok((name, inst)) => match client::JiraClient::new(inst, false, false) {
+                            Err(e) => eprintln!("complete: client error: {e}"),
+                            Ok(client) => {
+                                if let Err(e) = complete::issues(&client, name).await {
+                                    eprintln!("complete: {e}");
+                                }
+                            }
+                        },
+                    }
+                }
+                Commands::CompleteInstances => complete::instances(&cfg),
+                _ => unreachable!(),
+            },
+        }
         return Ok(());
     }
 
@@ -146,7 +181,9 @@ async fn main() -> Result<()> {
                 }
             }
         }
-        Commands::Completions { .. } => unreachable!(),
+        Commands::Completions { .. }
+        | Commands::CompleteIssues
+        | Commands::CompleteInstances => unreachable!(),
     }
 
     Ok(())
