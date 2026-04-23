@@ -8,6 +8,14 @@ use super::fields::{self, ResolvedCol, STATIC_COLS};
 
 const DEFAULT_COLUMNS: &[&str] = &["key", "type", "status", "assignee", "updated", "summary"];
 
+pub fn quick_jql(text: &str) -> String {
+    let escaped = text.replace('\\', "\\\\").replace('"', "\\\"");
+    format!(
+        "(summary ~ \"{t}\" OR description ~ \"{t}\" OR assignee = \"{t}\") ORDER BY updated DESC",
+        t = escaped,
+    )
+}
+
 pub async fn run_search(
     client: &JiraClient,
     jql: &str,

@@ -194,7 +194,15 @@ Repositories are resolved from the instance config. If the issue has components,
 
 ## Search
 
-Run an ad-hoc JQL query:
+Quick text search across summary, description, and assignee:
+
+```bash
+mjira search -t "login bug"
+mjira search -t "alice" --limit 50
+mjira search -t "payment" --columns key,type,status,summary
+```
+
+Or run an ad-hoc JQL query directly:
 
 ```bash
 mjira search 'project = PROJ AND status = "In Progress" ORDER BY updated DESC'
@@ -202,6 +210,8 @@ mjira search 'assignee = currentUser()' --limit 50
 mjira search 'priority = High' --columns key,type,status,summary
 mjira search --list-columns   # show available column names
 ```
+
+> **Note:** The `--text` search uses `assignee = "TERM"` for the assignee clause, which requires an exact username or account ID on Jira Cloud. On Server/Data Center it matches by username.
 
 ## Saved queries
 

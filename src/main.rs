@@ -60,8 +60,11 @@ enum Commands {
     /// Search issues using JQL
     Search {
         /// JQL query string (e.g. 'project = PROJ AND status = "In Progress"')
-        #[arg(required_unless_present = "list_columns")]
+        #[arg(required_unless_present_any = ["list_columns", "text"])]
         jql: Option<String>,
+        /// Quick text search — matches against summary, description, and assignee
+        #[arg(short = 't', long, conflicts_with = "jql")]
+        text: Option<String>,
         /// Maximum results to return
         #[arg(short, long, default_value = "25")]
         limit: u32,
@@ -158,11 +161,13 @@ async fn main() -> Result<()> {
             let client = client::JiraClient::new(inst, cli.verbose || cli.very_verbose, cli.very_verbose)?;
             board::handle(command, &client).await?;
         }
-        Commands::Search { jql, limit, columns, list_columns } => {
+        Commands::Search { jql, text, limit, columns, list_columns } => {
             let (_, inst) = cfg.get_instance(cli.instance.as_deref())?;
             let client = client::JiraClient::new(inst, cli.verbose || cli.very_verbose, cli.very_verbose)?;
             if list_columns {
                 fields::print_columns(&client, fields::STATIC_COLS).await?;
+            } else if let Some(term) = text {
+                search::run_search(&client, &search::quick_jql(&term), limit, columns).await?;
             } else {
                 search::run_search(&client, jql.as_deref().unwrap(), limit, columns).await?;
             }

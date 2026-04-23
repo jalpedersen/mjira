@@ -266,6 +266,7 @@ _mjira() {
         search)
           _arguments \
             '1::jql:' \
+            '(-t --text)'{-t,--text}'[Quick text search (summary, description, assignee)]:term:' \
             '(-l --limit)'{-l,--limit}'[Max results]:limit:' \
             '(-c --columns)'{-c,--columns}'[Columns]:columns:_mjira_columns' \
             '--list-columns[Print available columns]'
