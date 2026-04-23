@@ -1,5 +1,5 @@
 use anyhow::Result;
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand};
 
 mod client;
 mod commands;
@@ -85,11 +85,23 @@ enum Commands {
         #[arg(long)]
         list_columns: bool,
     },
+    /// Generate shell completion script
+    #[command(hide = true)]
+    Completions {
+        /// Shell to generate completions for
+        shell: clap_complete::Shell,
+    },
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
+
+    if let Commands::Completions { shell } = cli.command {
+        clap_complete::generate(shell, &mut Cli::command(), "mjira", &mut std::io::stdout());
+        return Ok(());
+    }
+
     let cfg = config::Config::load()?;
 
     match cli.command {
@@ -134,6 +146,7 @@ async fn main() -> Result<()> {
                 }
             }
         }
+        Commands::Completions { .. } => unreachable!(),
     }
 
     Ok(())

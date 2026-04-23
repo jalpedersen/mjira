@@ -5,14 +5,32 @@ A Rust CLI for interacting with Jira (Cloud and Server/Data Center) from the ter
 ## Installation
 
 ```bash
-just install   # builds release binary and copies to ~/bin/mjira
+just install   # builds release binary, copies to ~/bin/mjira, and installs zsh completions to ~/.zfunc/_mjira
 ```
 
 Or build manually:
 
 ```bash
 cargo build --release
-cp target/release/mjira ~/bin/
+cp target/release/jira ~/bin/mjira
+```
+
+## Shell completions
+
+Add to your `.zshrc`:
+
+```zsh
+eval "$(mjira completions zsh)"
+```
+
+For other shells:
+
+```bash
+# bash — add to ~/.bashrc
+eval "$(mjira completions bash)"
+
+# fish — add to ~/.config/fish/config.fish
+mjira completions fish | source
 ```
 
 ## Configuration
