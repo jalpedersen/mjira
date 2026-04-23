@@ -44,6 +44,20 @@ enum Commands {
         #[arg(short, long, default_value = "1000")]
         limit: u32,
     },
+    /// Show all time registrations for an issue
+    Issue {
+        /// Issue key (e.g. ABC-123)
+        key: String,
+        /// Start date filter (YYYY-MM-DD)
+        #[arg(long)]
+        from: Option<String>,
+        /// End date filter (YYYY-MM-DD)
+        #[arg(long)]
+        to: Option<String>,
+        /// Maximum number of worklogs to return
+        #[arg(short, long, default_value = "1000")]
+        limit: u32,
+    },
 }
 
 // --- Jira API ---
@@ -55,14 +69,27 @@ struct Myself {
 }
 
 #[derive(Deserialize)]
+struct IssueRef {
+    id: String,
+    key: String,
+}
+
+#[derive(Deserialize)]
 struct IssueSearchResponse {
     issues: Vec<IssueRef>,
 }
 
 #[derive(Deserialize)]
-struct IssueRef {
-    id: String,
-    key: String,
+struct UserBulkResponse {
+    values: Vec<UserInfo>,
+}
+
+#[derive(Deserialize)]
+struct UserInfo {
+    #[serde(rename = "accountId")]
+    account_id: String,
+    #[serde(rename = "displayName")]
+    display_name: String,
 }
 
 // --- Tempo Cloud response (api.tempo.io/4) ---
@@ -102,12 +129,20 @@ type DcResponse = Vec<DcWorklog>;
 #[derive(Deserialize)]
 struct DcWorklog {
     issue: WorklogIssue,
+    author: Option<DcAuthor>,
     #[serde(rename = "timeSpentSeconds")]
     time_spent_seconds: u64,
     // Older DC versions use "dateStarted", newer may use "startDate"
     #[serde(rename = "dateStarted", alias = "startDate")]
     date_started: String,
     comment: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct DcAuthor {
+    name: Option<String>,
+    #[serde(rename = "displayName")]
+    display_name: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -122,6 +157,7 @@ struct Worklog {
     issue_key: String,
     seconds: u64,
     description: String,
+    author: String,
 }
 
 fn format_duration(seconds: u64) -> String {
@@ -134,7 +170,7 @@ fn format_duration(seconds: u64) -> String {
     }
 }
 
-fn print_worklogs(mut worklogs: Vec<Worklog>) {
+fn print_worklogs(mut worklogs: Vec<Worklog>, show_author: bool) {
     if worklogs.is_empty() {
         println!("No time registrations found.");
         return;
@@ -150,36 +186,50 @@ fn print_worklogs(mut worklogs: Vec<Worklog>) {
         .max()
         .unwrap_or(4)
         .max(4);
-
-    println!(
-        "{:<dw$}  {:<kw$}  {:<tw$}  {}",
-        "Date".bold(),
-        "Issue".bold(),
-        "Time".bold(),
-        "Description".bold(),
-        dw = date_w,
-        kw = key_w,
-        tw = dur_w,
-    );
-    let sep_len = date_w + 2 + key_w + 2 + dur_w + 2 + 40;
-    let sep = "─".repeat(sep_len);
-    println!("{}", sep);
+    let author_w = if show_author {
+        worklogs.iter().map(|w| w.author.len()).max().unwrap_or(6).max(6)
+    } else {
+        0
+    };
 
     let total: u64 = worklogs.iter().map(|w| w.seconds).sum();
-    for w in &worklogs {
-        let desc: String = w.description.chars().take(80).collect();
+
+    if show_author {
+        println!(
+            "{:<dw$}  {:<aw$}  {:<kw$}  {:<tw$}  {}",
+            "Date".bold(), "Author".bold(), "Issue".bold(), "Time".bold(), "Description".bold(),
+            dw = date_w, aw = author_w, kw = key_w, tw = dur_w,
+        );
+        let sep = "─".repeat(date_w + 2 + author_w + 2 + key_w + 2 + dur_w + 2 + 40);
+        println!("{}", sep);
+        for w in &worklogs {
+            let desc: String = w.description.chars().take(80).collect();
+            println!(
+                "{:<dw$}  {:<aw$}  {:<kw$}  {:<tw$}  {}",
+                w.date, w.author, w.issue_key.cyan().to_string(), format_duration(w.seconds), desc,
+                dw = date_w, aw = author_w, kw = key_w, tw = dur_w,
+            );
+        }
+        println!("{}", "─".repeat(date_w + 2 + author_w + 2 + key_w + 2 + dur_w + 2 + 40));
+    } else {
         println!(
             "{:<dw$}  {:<kw$}  {:<tw$}  {}",
-            w.date,
-            w.issue_key.cyan().to_string(),
-            format_duration(w.seconds),
-            desc,
-            dw = date_w,
-            kw = key_w,
-            tw = dur_w,
+            "Date".bold(), "Issue".bold(), "Time".bold(), "Description".bold(),
+            dw = date_w, kw = key_w, tw = dur_w,
         );
+        let sep = "─".repeat(date_w + 2 + key_w + 2 + dur_w + 2 + 40);
+        println!("{}", sep);
+        for w in &worklogs {
+            let desc: String = w.description.chars().take(80).collect();
+            println!(
+                "{:<dw$}  {:<kw$}  {:<tw$}  {}",
+                w.date, w.issue_key.cyan().to_string(), format_duration(w.seconds), desc,
+                dw = date_w, kw = key_w, tw = dur_w,
+            );
+        }
+        println!("{}", "─".repeat(date_w + 2 + key_w + 2 + dur_w + 2 + 40));
     }
-    println!("{}", sep);
+
     println!("Total: {}", format_duration(total).bold());
 }
 
@@ -195,7 +245,44 @@ fn today() -> String {
     Local::now().date_naive().format("%Y-%m-%d").to_string()
 }
 
-// --- Command handler ---
+// --- Shared helpers ---
+
+async fn resolve_author_names(
+    jira: &JiraClient,
+    account_ids: &[String],
+) -> Result<std::collections::HashMap<String, String>> {
+    if account_ids.is_empty() {
+        return Ok(Default::default());
+    }
+    let params: Vec<(&str, &str)> = account_ids.iter().map(|id| ("accountId", id.as_str())).collect();
+    let resp: UserBulkResponse = jira.get_with_params("user/bulk", &params).await?;
+    Ok(resp.values.into_iter().map(|u| (u.account_id, u.display_name)).collect())
+}
+
+async fn resolve_issue_keys(
+    jira: &JiraClient,
+    ids: &[u64],
+) -> Result<std::collections::HashMap<u64, String>> {
+    if ids.is_empty() {
+        return Ok(Default::default());
+    }
+    let ids_str: Vec<String> = ids.iter().map(|id| id.to_string()).collect();
+    let jql = format!("id in ({})", ids_str.join(","));
+    let max = ids.len().to_string();
+    let search: IssueSearchResponse = jira
+        .get_with_params(
+            jira.search_path(),
+            &[("jql", &jql), ("fields", "key"), ("maxResults", &max)],
+        )
+        .await?;
+    Ok(search
+        .issues
+        .into_iter()
+        .filter_map(|i| i.id.parse::<u64>().ok().map(|id| (id, i.key)))
+        .collect())
+}
+
+// --- Command handlers ---
 
 async fn handle_log(
     jira: &JiraClient,
@@ -218,40 +305,33 @@ async fn handle_log(
         let resp: CloudResponse = tempo.get_with_params("worklogs", &params).await?;
 
         // authorAccountId query param is ignored by the API — filter client-side
-        let results: Vec<CloudWorklog> = resp.results
+        let results: Vec<CloudWorklog> = resp
+            .results
             .into_iter()
             .filter(|w| w.author.account_id == myself.account_id)
             .collect();
 
-        // Tempo v4 Cloud returns only issue.id — resolve keys via Jira search
-        let unique_ids: Vec<String> = {
+        let unique_ids: Vec<u64> = {
             let mut ids: Vec<u64> = results.iter().map(|w| w.issue.id).collect();
             ids.sort_unstable();
             ids.dedup();
-            ids.into_iter().map(|id| id.to_string()).collect()
+            ids
         };
-        let key_map: std::collections::HashMap<u64, String> = if unique_ids.is_empty() {
-            Default::default()
-        } else {
-            let jql = format!("id in ({})", unique_ids.join(","));
-            let max = unique_ids.len().to_string();
-            let search: IssueSearchResponse = jira
-                .get_with_params(jira.search_path(), &[("jql", &jql), ("fields", "key"), ("maxResults", &max)])
-                .await?;
-            search.issues.into_iter()
-                .filter_map(|i| i.id.parse::<u64>().ok().map(|id| (id, i.key)))
-                .collect()
-        };
+        let key_map = resolve_issue_keys(jira, &unique_ids).await?;
 
         results
             .into_iter()
             .map(|w| {
-                let key = key_map.get(&w.issue.id).cloned().unwrap_or_else(|| w.issue.id.to_string());
+                let key = key_map
+                    .get(&w.issue.id)
+                    .cloned()
+                    .unwrap_or_else(|| w.issue.id.to_string());
                 Worklog {
                     date: w.start_date,
                     issue_key: key,
                     seconds: w.time_spent_seconds,
                     description: w.description.unwrap_or_default(),
+                    author: String::new(),
                 }
             })
             .collect()
@@ -269,11 +349,96 @@ async fn handle_log(
                 issue_key: w.issue.key,
                 seconds: w.time_spent_seconds,
                 description: w.comment.unwrap_or_default(),
+                author: String::new(),
             })
             .collect()
     };
 
-    print_worklogs(worklogs);
+    print_worklogs(worklogs, false);
+    Ok(())
+}
+
+async fn handle_issue(
+    jira: &JiraClient,
+    tempo: &TempoClient,
+    key: &str,
+    from: Option<&str>,
+    to: Option<&str>,
+    limit: u32,
+) -> Result<()> {
+    let limit_str = limit.to_string();
+
+    let worklogs: Vec<Worklog> = if tempo.is_cloud {
+        let issue: IssueRef = jira.get(&format!("issue/{}", key)).await?;
+
+        let mut params: Vec<(&str, &str)> = vec![
+            ("issueId", issue.id.as_str()),
+            ("limit", limit_str.as_str()),
+        ];
+        if let Some(f) = from {
+            params.push(("from", f));
+        }
+        if let Some(t) = to {
+            params.push(("to", t));
+        }
+
+        let resp: CloudResponse = tempo.get_with_params("worklogs", &params).await?;
+
+        let unique_author_ids: Vec<String> = {
+            let mut ids: Vec<String> = resp.results.iter().map(|w| w.author.account_id.clone()).collect();
+            ids.sort();
+            ids.dedup();
+            ids
+        };
+        let name_map = resolve_author_names(jira, &unique_author_ids).await?;
+
+        resp.results
+            .into_iter()
+            .map(|w| {
+                let author = name_map
+                    .get(&w.author.account_id)
+                    .cloned()
+                    .unwrap_or_else(|| w.author.account_id.clone());
+                Worklog {
+                    date: w.start_date,
+                    issue_key: key.to_string(),
+                    seconds: w.time_spent_seconds,
+                    description: w.description.unwrap_or_default(),
+                    author,
+                }
+            })
+            .collect()
+    } else {
+        let mut params: Vec<(&str, &str)> = vec![
+            ("issue", key),
+            ("limit", limit_str.as_str()),
+        ];
+        if let Some(f) = from {
+            params.push(("dateFrom", f));
+        }
+        if let Some(t) = to {
+            params.push(("dateTo", t));
+        }
+
+        let resp: DcResponse = tempo.get_with_params("worklogs", &params).await?;
+        resp.into_iter()
+            .map(|w| {
+                let author = w
+                    .author
+                    .and_then(|a| a.display_name.or(a.name))
+                    .unwrap_or_default();
+                Worklog {
+                    date: w.date_started.chars().take(10).collect(),
+                    issue_key: key.to_string(),
+                    seconds: w.time_spent_seconds,
+                    description: w.comment.unwrap_or_default(),
+                    author,
+                }
+            })
+            .collect()
+    };
+
+    print_worklogs(worklogs, true);
     Ok(())
 }
 
@@ -294,6 +459,9 @@ async fn main() -> Result<()> {
             let from = from.unwrap_or_else(week_start);
             let to = to.unwrap_or_else(today);
             handle_log(&jira, &tempo, instance, &from, &to, limit).await?;
+        }
+        Commands::Issue { key, from, to, limit } => {
+            handle_issue(&jira, &tempo, &key, from.as_deref(), to.as_deref(), limit).await?;
         }
     }
 

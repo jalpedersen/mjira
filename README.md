@@ -323,6 +323,15 @@ tempo log --limit 200                # return up to 200 entries (default 1000)
 tempo --instance dc log              # use a specific instance
 ```
 
+#### Show registrations for an issue
+
+```bash
+tempo issue ABC-123
+tempo issue ABC-123 --from 2024-01-01 --to 2024-01-31
+```
+
+Includes all authors, not just your own entries.
+
 Output:
 
 ```
