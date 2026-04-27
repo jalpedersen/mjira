@@ -142,6 +142,9 @@ pub enum IssueCommands {
         /// Show repos with no commits found
         #[arg(short, long)]
         verbose: bool,
+        /// Ignore whitespace changes in diff
+        #[arg(short = 'w', long = "ignore-whitespace")]
+        ignore_whitespace: bool,
     },
 }
 
@@ -221,7 +224,8 @@ pub async fn handle(cmd: IssueCommands, client: &JiraClient, instance: &Instance
             commit,
             repos,
             verbose,
-        } => diff(client, instance, &key, commit.as_deref(), repos, verbose).await,
+            ignore_whitespace,
+        } => diff(client, instance, &key, commit.as_deref(), repos, verbose, ignore_whitespace).await,
     }
 }
 
@@ -932,6 +936,7 @@ async fn diff(
     commit: Option<&str>,
     extra_repos: Vec<String>,
     verbose: bool,
+    ignore_whitespace: bool,
 ) -> Result<()> {
     let issue: Value = client
         .get(&format!("issue/{key}?fields=components,summary"))
@@ -1006,7 +1011,7 @@ async fn diff(
                 branch_str.magenta()
             );
             println!("{}", "─".repeat(80));
-            show_commit_diff(repo_path, hash);
+            show_commit_diff(repo_path, hash, ignore_whitespace);
         } else {
             // Find all commits mentioning the key and show each diff.
             let output = std::process::Command::new("git")
@@ -1073,7 +1078,7 @@ async fn diff(
                                     );
                                     println!("  {}", subject);
                                     println!("{}", "─".repeat(80));
-                                    show_commit_diff(repo_path, hash);
+                                    show_commit_diff(repo_path, hash, ignore_whitespace);
                                 }
                                 _ => {}
                             }
@@ -1232,10 +1237,13 @@ fn collect_adf_text(node: &Value, out: &mut String) {
     }
 }
 
-fn show_commit_diff(repo_path: &str, hash: &str) {
-    let output = std::process::Command::new("git")
-        .args(["-C", repo_path, "show", "--stat", "--patch", hash])
-        .output();
+fn show_commit_diff(repo_path: &str, hash: &str, ignore_whitespace: bool) {
+    let mut args = vec!["-C", repo_path, "show", "--stat", "--patch"];
+    if ignore_whitespace {
+        args.push("-w");
+    }
+    args.push(hash);
+    let output = std::process::Command::new("git").args(&args).output();
 
     match output {
         Err(e) => println!("  {} {}", "error:".red(), e),

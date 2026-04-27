@@ -188,6 +188,7 @@ Show the full diff for those commits:
 ```bash
 mjira issue diff PROJ-123
 mjira issue diff PROJ-123 --commit abc1234   # diff for a specific commit only
+mjira issue diff PROJ-123 -w                 # ignore whitespace changes
 ```
 
 Repositories are resolved from the instance config. If the issue has components, `component_repos` mappings take priority over the `repos` fallback list. See `config.example.toml` for the format.
