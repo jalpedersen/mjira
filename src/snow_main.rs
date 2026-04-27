@@ -28,6 +28,8 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
+    /// Open a browser window, complete SSO login, and save session cookies to config
+    Login {},
     /// List your time registrations
     Log {
         /// Start date (YYYY-MM-DD), defaults to Monday of the current week
@@ -199,6 +201,98 @@ async fn handle_log(
     Ok(())
 }
 
+// --- Login ---
+
+fn find_chrome() -> Option<std::path::PathBuf> {
+    if let Ok(path) = std::env::var("CHROME_PATH") {
+        let p = std::path::PathBuf::from(path);
+        if p.exists() {
+            return Some(p);
+        }
+    }
+    let candidates: &[&str] = &[
+        "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+        "/Applications/Chromium.app/Contents/MacOS/Chromium",
+        "/Applications/Google Chrome Canary.app/Contents/MacOS/Google Chrome Canary",
+        "/usr/bin/google-chrome",
+        "/usr/bin/google-chrome-stable",
+        "/usr/bin/chromium",
+        "/usr/bin/chromium-browser",
+        "/snap/bin/chromium",
+    ];
+    candidates.iter().map(std::path::PathBuf::from).find(|p| p.exists())
+}
+
+async fn handle_login(instance_name: &str, instance: &snow_config::SnowInstance) -> Result<()> {
+    use chromiumoxide::{Browser, BrowserConfig};
+    use futures::StreamExt;
+
+    let chrome_path = find_chrome().ok_or_else(|| {
+        anyhow::anyhow!(
+            "Chrome/Chromium not found. Install Google Chrome or set the CHROME_PATH env var."
+        )
+    })?;
+
+    eprintln!("Launching Chrome at {} ...", instance.url);
+
+    let config = BrowserConfig::builder()
+        .chrome_executable(chrome_path)
+        .with_head()
+        .build()
+        .map_err(|e| anyhow::anyhow!("Browser config error: {}", e))?;
+
+    let (browser, mut handler) = Browser::launch(config).await?;
+
+    tokio::spawn(async move {
+        while handler.next().await.is_some() {}
+    });
+
+    let page = browser.new_page(&instance.url).await?;
+
+    println!("Complete sign-in in the browser window.");
+    println!("Press Enter when you are fully logged in...");
+    let mut buf = String::new();
+    std::io::stdin().read_line(&mut buf)?;
+
+    use chromiumoxide::cdp::browser_protocol::network::GetCookiesParams;
+    let resp = page
+        .execute(GetCookiesParams { urls: Some(vec![instance.url.clone()]) })
+        .await?;
+
+    let cookies: Vec<String> = resp
+        .cookies
+        .iter()
+        .map(|c| format!("{}={}", c.name, c.value))
+        .collect();
+
+    if cookies.is_empty() {
+        anyhow::bail!("No cookies found for {}. Did you complete the sign-in?", instance.url);
+    }
+
+    let csrf: Option<String> = page
+        .evaluate("window.g_ck || ''")
+        .await
+        .ok()
+        .and_then(|v| v.into_value::<String>().ok())
+        .filter(|s| !s.is_empty());
+
+    let mut cfg = snow_config::SnowConfig::load()?;
+    let inst = cfg
+        .instances
+        .get_mut(instance_name)
+        .ok_or_else(|| anyhow::anyhow!("Instance '{}' not found in config", instance_name))?;
+    inst.cookie = Some(cookies.join("; "));
+    inst.x_user_token = csrf.clone();
+    cfg.save()?;
+
+    println!("Saved {} session cookie(s).", cookies.len());
+    if csrf.is_some() {
+        println!("Saved X-UserToken (g_ck).");
+    }
+
+    Ok(())
+}
+
 // --- Entry point ---
 
 #[tokio::main]
@@ -206,12 +300,14 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
     let cfg = SnowConfig::load()?;
     let verbose = cli.verbose || cli.very_verbose;
-    let (_, instance) = cfg.get_instance(cli.instance.as_deref())?;
-
-    let client = SnowClient::new(instance, verbose, cli.very_verbose)?;
+    let (instance_name, instance) = cfg.get_instance(cli.instance.as_deref())?;
 
     match cli.command {
+        Commands::Login {} => {
+            handle_login(instance_name, instance).await?;
+        }
         Commands::Log { from, to, limit } => {
+            let client = SnowClient::new(instance, verbose, cli.very_verbose)?;
             let from = from.unwrap_or_else(week_start);
             let to = to.unwrap_or_else(today);
             let table = instance.time_table.as_deref().unwrap_or("task_time_worked");

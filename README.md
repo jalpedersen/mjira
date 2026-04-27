@@ -375,9 +375,20 @@ password = "s3cr3t"
 # time_table    = "task_time_worked"   # override if your instance uses a different table
 ```
 
-For SSO-protected instances, log in via the browser, open DevTools → Application → Cookies, and copy the session cookies into the `cookie` field. If you still get 401s, also grab the CSRF token by running `g_ck` in the browser console and set `x_user_token`.
+For SSO-protected instances, use `msnow login` (see below) to authenticate automatically. Alternatively, log in via the browser, open DevTools → Application → Cookies, copy the session cookies into the `cookie` field, and if you still get 401s also grab the CSRF token by running `g_ck` in the browser console and set `x_user_token`.
 
 ### Commands
+
+#### Login (SSO)
+
+Opens a Chrome/Chromium window, navigates to the instance URL, waits for you to complete SSO, then automatically extracts and saves the session cookies and CSRF token to `snow.toml`:
+
+```bash
+msnow login
+msnow --instance work login
+```
+
+Requires Google Chrome or Chromium to be installed. Set `CHROME_PATH` to point to an alternative binary if needed. Re-run whenever your session expires.
 
 #### List time registrations
 

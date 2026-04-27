@@ -70,6 +70,18 @@ impl SnowConfig {
         toml::from_str(&content).context("Failed to parse ServiceNow config file")
     }
 
+    pub fn save(&self) -> Result<()> {
+        let path = config_path();
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)
+                .with_context(|| format!("Failed to create config dir {}", parent.display()))?;
+        }
+        let content = toml::to_string_pretty(self).context("Failed to serialize config")?;
+        std::fs::write(&path, content)
+            .with_context(|| format!("Failed to write config to {}", path.display()))?;
+        Ok(())
+    }
+
     pub fn get_instance<'a>(&'a self, name: Option<&'a str>) -> Result<(&'a str, &'a SnowInstance)> {
         let name = match name {
             Some(n) => n,
